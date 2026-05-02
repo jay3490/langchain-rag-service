@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-rag-service"
+version = "0.1.0"
+description = "A FastAPI retrieval-augmented generation service built on LangChain runnables."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "jay3490" }]
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=1.4,<2",
+    "langchain-core>=1.7,<2",
+    "langchain-community>=0.4.2,<0.5",
+    "langchain-openai>=1.7,<2",
+    "langchain-text-splitters>=1.1,<2",
+    "faiss-cpu>=1.15",
+    "rank-bm25>=0.2.2",
+    "fastapi>=0.162",
+    "uvicorn[standard]>=0.54",
+    "pydantic-settings>=2.16",
+    "python-multipart>=0.0.32",
+    "pypdf>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "httpx>=0.28",
+    "ruff>=0.17",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_service"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
