@@ -1,0 +1,20 @@
+Glossary of retrieval terms
+
+Corpus: the full collection of documents that a retrieval system can search.
+
+Chunk: a contiguous piece of a document that is indexed and retrieved as one unit.
+
+Embedding: a dense vector of numbers that represents the meaning of a piece of text.
+
+Hit rate at k: the fraction of evaluation questions for which at least one relevant
+document appears among the top k retrieved results.
+
+Mean reciprocal rank (MRR): the average, over all questions, of one divided by the rank
+of the first relevant result. A question whose first relevant result is ranked third
+contributes one third; a question with no relevant result in the list contributes zero.
+
+Grounding: constraining a language model to answer only from the supplied context, and to
+say so when the context does not contain the answer.
+
+Citation: a marker in the answer, such as [2], that points to the numbered source the
+statement came from.
