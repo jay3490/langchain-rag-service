@@ -47,3 +47,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+filterwarnings = [
+    # FAISS still ships in langchain-community, which upstream has marked as sunsetting.
+    "ignore:`langchain-community` is being sunset:DeprecationWarning",
+]
