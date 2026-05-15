@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SAMPLE_DOCS = REPO_ROOT / "data" / "docs"
+
 
 def build_pdf(pages: list[str]) -> bytes:
     """Build a minimal, valid PDF with one line of Helvetica text per page."""
