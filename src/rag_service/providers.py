@@ -24,9 +24,8 @@ from langchain_openai import OpenAIEmbeddings
 from pydantic import Field
 
 from rag_service.config import Settings
+from rag_service.prompts import NO_ANSWER
 from rag_service.text import split_sentences, tokenize
-
-NO_ANSWER = "I could not find the answer in the provided documents."
 
 _SOURCE_BLOCK = re.compile(r'<source id="(\d+)"[^>]*>(.*?)</source>', re.DOTALL)
 _QUESTION_BLOCK = re.compile(r"<question>(.*?)</question>", re.DOTALL)
@@ -81,7 +80,8 @@ class HashingEmbeddings(Embeddings):
 class ExtractiveFakeChatModel(BaseChatModel):
     """A deterministic chat model that answers by extraction instead of generation.
 
-    It understands the tagged prompts built in :mod:`rag_service.chain`:
+    It reads the last human message and understands the tagged prompts defined in
+    :mod:`rag_service.prompts`:
 
     * a prompt with ``<source id="N">`` blocks and a ``<question>`` is answered with the
       source sentence that shares the most tokens with the question, cited as ``[N]``;
@@ -97,9 +97,8 @@ class ExtractiveFakeChatModel(BaseChatModel):
         return "extractive-fake"
 
     def _respond(self, messages: list[BaseMessage]) -> str:
-        prompt = "\n".join(
-            str(message.content) for message in messages if isinstance(message, HumanMessage)
-        )
+        human = [message for message in messages if isinstance(message, HumanMessage)]
+        prompt = str(human[-1].content) if human else ""
         question_match = _QUESTION_BLOCK.search(prompt)
         question = question_match.group(1).strip() if question_match else prompt.strip()
 

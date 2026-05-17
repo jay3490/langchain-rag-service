@@ -1,0 +1,47 @@
+"""Prompt templates and the helpers that render retrieved context into them."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+NO_ANSWER = "I could not find the answer in the provided documents."
+
+ANSWER_SYSTEM = (
+    "You answer questions using only the numbered sources inside <context>.\n"
+    "Cite each statement with the number of the source it came from in square brackets, "
+    "for example [2]. Do not cite sources that you did not use.\n"
+    "If the sources do not contain the answer, reply exactly: " + NO_ANSWER + "\n"
+    "Do not use outside knowledge."
+)
+
+ANSWER_HUMAN = "<context>\n{context}\n</context>\n\n<question>{question}</question>"
+
+
+def answer_prompt() -> ChatPromptTemplate:
+    """System instructions, optional chat history, then the context and question."""
+    return ChatPromptTemplate.from_messages(
+        [
+            ("system", ANSWER_SYSTEM),
+            MessagesPlaceholder("chat_history", optional=True),
+            ("human", ANSWER_HUMAN),
+        ]
+    )
+
+
+def source_label(document: Document) -> str:
+    """Human-readable origin of a chunk, e.g. ``manual.pdf (page 3)``."""
+    label = str(document.metadata.get("source", "unknown"))
+    page = document.metadata.get("page")
+    return f"{label} (page {page})" if page is not None else label
+
+
+def format_context(documents: Sequence[Document]) -> str:
+    """Render documents as numbered ``<source>`` blocks; numbers start at 1."""
+    return "\n".join(
+        f'<source id="{number}" name="{source_label(document)}">\n'
+        f"{document.page_content.strip()}\n</source>"
+        for number, document in enumerate(documents, start=1)
+    )

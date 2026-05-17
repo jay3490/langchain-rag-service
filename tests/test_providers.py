@@ -4,8 +4,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from rag_service.config import Settings
+from rag_service.prompts import NO_ANSWER
 from rag_service.providers import (
-    NO_ANSWER,
     ExtractiveFakeChatModel,
     HashingEmbeddings,
     build_chat_model,
