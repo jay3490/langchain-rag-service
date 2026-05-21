@@ -12,7 +12,14 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableBranch, RunnableLambda, RunnablePassthrough
 
-from rag_service.prompts import NO_ANSWER, answer_prompt, format_context, source_label
+from rag_service.prompts import (
+    NO_ANSWER,
+    answer_prompt,
+    format_context,
+    format_conversation,
+    rewrite_prompt,
+    source_label,
+)
 
 SNIPPET_CHARS = 240
 
@@ -77,10 +84,35 @@ def build_answer_chain(llm: BaseChatModel) -> Runnable[dict[str, Any], str]:
     ).with_config(run_name="answer")
 
 
-def build_retrieval_chain(retriever: BaseRetriever) -> Runnable[dict[str, Any], dict[str, Any]]:
-    """Add ``standalone_question`` and the retrieved ``documents`` to the input."""
+def build_rewrite_chain(llm: BaseChatModel) -> Runnable[dict[str, Any], str]:
+    """Turn ``question`` into a standalone query using ``chat_history``.
+
+    The first turn of a conversation has no history, so the question is used as-is and
+    the model is not called.
+    """
+    rewrite = (
+        RunnablePassthrough.assign(conversation=lambda x: format_conversation(x["chat_history"]))
+        | rewrite_prompt()
+        | llm
+        | StrOutputParser()
+        | RunnableLambda(lambda text: " ".join(text.split()))
+    )
+    return RunnableBranch(
+        (lambda x: not x.get("chat_history"), itemgetter("question")),
+        rewrite,
+    ).with_config(run_name="rewrite_question")
+
+
+def build_retrieval_chain(
+    retriever: BaseRetriever, llm: BaseChatModel
+) -> Runnable[dict[str, Any], dict[str, Any]]:
+    """Add ``standalone_question`` and the retrieved ``documents`` to the input.
+
+    The retriever searches with the standalone question, so follow-ups such as
+    "what value is typical for it?" retrieve the chunks the conversation is about.
+    """
     return (
-        RunnablePassthrough.assign(standalone_question=itemgetter("question"))
+        RunnablePassthrough.assign(standalone_question=build_rewrite_chain(llm))
         .assign(documents=itemgetter("standalone_question") | retriever)
         .with_config(run_name="retrieve")
     )
@@ -98,9 +130,9 @@ def _to_result(state: dict[str, Any]) -> RagResult:
 def build_rag_chain(
     llm: BaseChatModel, retriever: BaseRetriever
 ) -> Runnable[dict[str, Any], RagResult]:
-    """Full pipeline: ``{"question": ...}`` in, :class:`RagResult` out."""
+    """Full pipeline: ``{"question", "chat_history"?}`` in, :class:`RagResult` out."""
     return (
-        build_retrieval_chain(retriever)
+        build_retrieval_chain(retriever, llm)
         | RunnablePassthrough.assign(answer=build_answer_chain(llm))
         | RunnableLambda(_to_result)
     ).with_config(run_name="rag")

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from langchain_core.documents import Document
+from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 NO_ANSWER = "I could not find the answer in the provided documents."
@@ -28,6 +29,30 @@ def answer_prompt() -> ChatPromptTemplate:
             MessagesPlaceholder("chat_history", optional=True),
             ("human", ANSWER_HUMAN),
         ]
+    )
+
+
+REWRITE_SYSTEM = (
+    "You rewrite follow-up questions for a search engine.\n"
+    "Given the conversation and the latest question, write a single standalone question "
+    "that can be understood without the conversation. Resolve pronouns and references to "
+    "earlier turns. Do not answer the question. Reply with the question only."
+)
+
+REWRITE_HUMAN = "<conversation>\n{conversation}\n</conversation>\n\n<question>{question}</question>"
+
+
+def rewrite_prompt() -> ChatPromptTemplate:
+    """Prompt that turns a follow-up question into a standalone search query."""
+    return ChatPromptTemplate.from_messages([("system", REWRITE_SYSTEM), ("human", REWRITE_HUMAN)])
+
+
+def format_conversation(messages: Sequence[BaseMessage]) -> str:
+    """Render chat history as ``user:``/``assistant:`` lines, one message per line."""
+    roles = {"human": "user", "ai": "assistant"}
+    return "\n".join(
+        f"{roles.get(message.type, message.type)}: {' '.join(message.text.split())}"
+        for message in messages
     )
 
 
