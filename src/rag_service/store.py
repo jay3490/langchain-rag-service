@@ -49,6 +49,7 @@ class IngestResult:
     sources: list[str]
     chunks_added: int
     chunks_removed: int
+    unchanged: list[str] = field(default_factory=list)
 
 
 def _build_snapshot(vectorstore: FAISS | None) -> IndexSnapshot:
@@ -137,26 +138,42 @@ class DocumentIndex:
         ]
 
     def add(self, chunks: Sequence[Document]) -> IngestResult:
-        """Index ``chunks``, replacing any chunks previously indexed for the same sources."""
-        sources = sorted({str(chunk.metadata["source"]) for chunk in chunks})
-        if not chunks:
-            return IngestResult(sources=[], chunks_added=0, chunks_removed=0)
-        ids = [str(chunk.metadata["chunk_id"]) for chunk in chunks]
+        """Index ``chunks``, replacing any chunks previously indexed for the same sources.
+
+        A source whose chunk ids all match what is already indexed is left alone, so
+        re-ingesting an unchanged corpus does not call the embedding model.
+        """
+        by_source: dict[str, list[Document]] = {}
+        for chunk in chunks:
+            by_source.setdefault(str(chunk.metadata["source"]), []).append(chunk)
+        sources = sorted(by_source)
         with self._lock:
-            stale = self._ids_for_sources(set(sources))
+            unchanged = sorted(
+                source
+                for source, new in by_source.items()
+                if set(self._ids_for_sources({source}))
+                == {str(chunk.metadata["chunk_id"]) for chunk in new}
+            )
+            changed = [chunk for chunk in chunks if chunk.metadata["source"] not in unchanged]
+            if not changed:
+                return IngestResult(sources, chunks_added=0, chunks_removed=0, unchanged=unchanged)
+            ids = [str(chunk.metadata["chunk_id"]) for chunk in changed]
+            stale = self._ids_for_sources(set(sources) - set(unchanged))
             vectorstore = self._clone_vectorstore()
             if vectorstore is None:
                 vectorstore = FAISS.from_documents(
-                    list(chunks), self.embeddings, ids=ids, normalize_L2=True
+                    changed, self.embeddings, ids=ids, normalize_L2=True
                 )
             else:
                 if stale:
                     vectorstore.delete(stale)
-                vectorstore.add_documents(list(chunks), ids=ids)
+                vectorstore.add_documents(changed, ids=ids)
             snapshot = _build_snapshot(vectorstore)
             self._save(snapshot)
             self._snapshot = snapshot
-        return IngestResult(sources=sources, chunks_added=len(chunks), chunks_removed=len(stale))
+        return IngestResult(
+            sources, chunks_added=len(changed), chunks_removed=len(stale), unchanged=unchanged
+        )
 
     def remove_source(self, source: str) -> int:
         """Remove every chunk of ``source``; returns how many chunks were removed."""

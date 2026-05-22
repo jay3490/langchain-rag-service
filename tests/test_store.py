@@ -47,6 +47,28 @@ def test_reingesting_a_source_replaces_its_chunks(index: DocumentIndex) -> None:
     assert index.snapshot.source_counts() == {"a.md": 1, "b.md": 1}
 
 
+def test_unchanged_sources_are_not_re_embedded(tmp_path: Path) -> None:
+    class CountingEmbeddings(HashingEmbeddings):
+        calls = 0
+
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            CountingEmbeddings.calls += len(texts)
+            return super().embed_documents(texts)
+
+    index = DocumentIndex(tmp_path / "idx", CountingEmbeddings(dim=64), "fake:hashing-64")
+    a, b = _chunks("a.md", "alpha text"), _chunks("b.md", "beta text")
+    index.add(a + b)
+    calls_after_first = CountingEmbeddings.calls
+
+    again = index.add(a + _chunks("b.md", "beta text, edited"))
+
+    assert again.unchanged == ["a.md"]
+    assert again.chunks_added == 1
+    assert again.chunks_removed == 1
+    assert CountingEmbeddings.calls == calls_after_first + 1
+    assert index.add(a).chunks_added == 0
+
+
 def test_index_persists_and_reloads(index: DocumentIndex, tmp_path: Path) -> None:
     index.add(_chunks("a.md", "persisted text about faiss indexes."))
 
