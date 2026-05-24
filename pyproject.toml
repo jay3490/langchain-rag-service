@@ -26,6 +26,9 @@ dependencies = [
     "pypdf>=6.0",
 ]
 
+[project.scripts]
+rag-service = "rag_service.__main__:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0",

@@ -26,6 +26,11 @@ def test_split_sentences() -> None:
     assert split_sentences("One.  Two!\nThree?") == ["One.", "Two!", "Three?"]
 
 
+def test_split_sentences_keeps_paragraphs_apart_and_drops_headings() -> None:
+    text = "# Title\n\nFirst paragraph without a stop\n\n## Part\nSecond one. Third."
+    assert split_sentences(text) == ["First paragraph without a stop", "Second one.", "Third."]
+
+
 def test_hashing_embeddings_are_deterministic_and_normalised() -> None:
     embeddings = HashingEmbeddings(dim=64)
     first = embeddings.embed_query("reciprocal rank fusion")

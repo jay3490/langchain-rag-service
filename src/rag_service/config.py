@@ -40,10 +40,18 @@ class Settings(BaseSettings):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     fake_embedding_dim: int = Field(default=384, ge=16)
 
+    # HTTP server ----------------------------------------------------------
+    host: str = "127.0.0.1"
+    port: int = Field(default=8000, ge=1, le=65535)
+
     # Storage and ingestion -----------------------------------------------
     index_dir: Path = Path("var/index")
-    ingest_root: Path = Path("data")
+    ingest_root: Path = Field(
+        default=Path("data"),
+        description="Directory ingestion through the API is restricted to this tree.",
+    )
     ingest_on_startup: Path | None = None
+    max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
     chunk_size: int = Field(default=800, ge=50)
     chunk_overlap: int = Field(default=120, ge=0)
 

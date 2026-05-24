@@ -6,6 +6,7 @@ import re
 
 _TOKEN = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)*")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
 
 # fmt: off
 STOP_WORDS = frozenset({
@@ -27,6 +28,14 @@ def tokenize(text: str) -> list[str]:
 
 
 def split_sentences(text: str) -> list[str]:
-    """Split prose into sentences on terminal punctuation, collapsing whitespace."""
-    flat = " ".join(text.split())
-    return [sentence for sentence in _SENTENCE_END.split(flat) if sentence]
+    """Split prose into sentences, collapsing whitespace.
+
+    Paragraphs (separated by blank lines) never share a sentence, and Markdown heading
+    lines are dropped because they are titles rather than statements.
+    """
+    sentences: list[str] = []
+    for paragraph in _PARAGRAPH_BREAK.split(text):
+        lines = [line for line in paragraph.splitlines() if not line.lstrip().startswith("#")]
+        flat = " ".join(" ".join(lines).split())
+        sentences.extend(sentence for sentence in _SENTENCE_END.split(flat) if sentence)
+    return sentences
