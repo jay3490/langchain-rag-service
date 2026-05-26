@@ -1,0 +1,20 @@
+{"question": "Which FAISS index compares the query against every stored vector?", "relevant": ["vector-search.md"]}
+{"question": "What does the nprobe parameter trade off in an IVF index?", "relevant": ["vector-search.md"]}
+{"question": "Why is loading index.pkl from an untrusted directory dangerous?", "relevant": ["vector-search.md"]}
+{"question": "When do L2 distance and cosine similarity give the same ranking?", "relevant": ["vector-search.md"]}
+{"question": "What does the k1 parameter control in BM25?", "relevant": ["bm25.md"]}
+{"question": "Why can lexical search miss a passage that uses a synonym?", "relevant": ["bm25.md"]}
+{"question": "Which ranking function rewards rare terms through inverse document frequency?", "relevant": ["bm25.md"]}
+{"question": "How is the fused score of a document computed from its ranks?", "relevant": ["rank-fusion.md"]}
+{"question": "Who introduced reciprocal rank fusion and in which year?", "relevant": ["rank-fusion.md"]}
+{"question": "How can one retriever be trusted more than another when merging result lists?", "relevant": ["rank-fusion.md"]}
+{"question": "What happens when chunks are too large for the embedding?", "relevant": ["chunking.md"]}
+{"question": "Why should consecutive chunks overlap?", "relevant": ["chunking.md"]}
+{"question": "In what order does a recursive splitter try its separators?", "relevant": ["chunking.md"]}
+{"question": "How does maximal marginal relevance avoid near-duplicate results?", "relevant": ["mmr.md"]}
+{"question": "What does lambda_mult equal to 1 reduce to?", "relevant": ["mmr.md"]}
+{"question": "Which header does a reconnecting browser send to resume an event stream?", "relevant": ["server-sent-events.md"]}
+{"question": "Why are WebSockets unnecessary for a streamed response to a single request?", "relevant": ["server-sent-events.md"]}
+{"question": "Why are follow-up questions rewritten before searching?", "relevant": ["conversational-retrieval.md"]}
+{"question": "Where should chat history live when the service runs several replicas?", "relevant": ["conversational-retrieval.md"]}
+{"question": "How is mean reciprocal rank defined?", "relevant": ["glossary.txt"]}

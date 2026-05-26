@@ -28,6 +28,7 @@ dependencies = [
 
 [project.scripts]
 rag-service = "rag_service.__main__:main"
+rag-eval = "rag_service.evaluation:main"
 
 [project.optional-dependencies]
 dev = [
