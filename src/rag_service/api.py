@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from rag_service import __version__
@@ -15,6 +17,8 @@ from rag_service.config import RetrieverMode, SearchType, Settings, get_settings
 from rag_service.ingestion import UnsupportedFileError
 from rag_service.service import EmptyIndexError, PathOutsideRootError, RagService
 from rag_service.store import IngestResult
+
+logger = logging.getLogger(__name__)
 
 SESSION_ID_PATTERN = r"^[A-Za-z0-9_.:-]{1,128}$"
 
@@ -94,6 +98,12 @@ def get_service(request: Request) -> RagService:
 
 
 ServiceDep = Annotated[RagService, Depends(get_service)]
+
+
+def require_documents(service: ServiceDep) -> None:
+    """Fail with 409 before a stream starts if nothing has been ingested."""
+    if service.index.snapshot.is_empty:
+        raise HTTPException(status.HTTP_409_CONFLICT, "the index is empty; ingest documents first")
 
 
 def _ingest_response(service: RagService, result: IngestResult) -> IngestResponse:
@@ -185,6 +195,31 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
         except EmptyIndexError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         return QueryResponse.model_validate({**result, "session_id": body.session_id})
+
+    @app.post(
+        "/query/stream",
+        response_class=EventSourceResponse,
+        dependencies=[Depends(require_documents)],
+        tags=["query"],
+    )
+    async def query_stream(
+        service: ServiceDep, body: QueryRequest
+    ) -> AsyncIterator[ServerSentEvent]:
+        """Stream the answer as Server-Sent Events.
+
+        Events, in order: ``sources`` (retrieved chunks and the standalone question),
+        one ``token`` per generated text chunk, then ``done`` with the full answer. A
+        failure after the stream has started is reported as an ``error`` event.
+        """
+        options = service.options(k=body.k, mode=body.retriever_mode, search_type=body.search_type)
+        try:
+            async for item in service.stream_answer(
+                body.question, session_id=body.session_id, options=options
+            ):
+                yield ServerSentEvent(event=item.event, data=item.data)
+        except Exception:
+            logger.exception("streaming answer failed")
+            yield ServerSentEvent(event="error", data={"detail": "answer generation failed"})
 
     @app.get("/sessions/{session_id}", response_model=SessionResponse, tags=["sessions"])
     def get_session(service: ServiceDep, session_id: str) -> SessionResponse:

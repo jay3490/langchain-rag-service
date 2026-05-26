@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any, NamedTuple
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
+from langchain_core.retrievers import BaseRetriever
 
-from rag_service.chain import RagResult, build_rag_chain
+from rag_service.chain import (
+    RagResult,
+    build_answer_chain,
+    build_rag_chain,
+    build_retrieval_chain,
+    source_refs,
+)
 from rag_service.config import Settings
 from rag_service.ingestion import load_bytes, load_directory, safe_source_name, split_documents
 from rag_service.memory import SessionStore
@@ -26,6 +35,13 @@ class EmptyIndexError(RuntimeError):
 
 class PathOutsideRootError(ValueError):
     """Raised when a directory to ingest lies outside ``settings.ingest_root``."""
+
+
+class StreamEvent(NamedTuple):
+    """One event of a streamed answer: ``sources``, ``token`` or ``done``."""
+
+    event: str
+    data: Any
 
 
 def embedding_id(settings: Settings) -> str:
@@ -106,10 +122,7 @@ class RagService:
         options: RetrievalOptions | None = None,
     ) -> RagResult:
         """Answer ``question``; with a ``session_id`` the turn is added to its history."""
-        snapshot = self.index.snapshot
-        if snapshot.is_empty:
-            raise EmptyIndexError("the index is empty; ingest documents first")
-        retriever = build_retriever(snapshot, options or self.default_options)
+        retriever = self._retriever(options)
         history = self.sessions.get(session_id) if session_id else []
         result = await build_rag_chain(self.llm, retriever).ainvoke(
             {"question": question, "chat_history": history}
@@ -117,3 +130,44 @@ class RagService:
         if session_id:
             self.sessions.append_turn(session_id, question, result["answer"])
         return result
+
+    async def stream_answer(
+        self,
+        question: str,
+        *,
+        session_id: str | None = None,
+        options: RetrievalOptions | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Answer ``question`` as a sequence of events.
+
+        Emits one ``sources`` event once retrieval is done, a ``token`` event per chunk
+        of generated text, and a final ``done`` event with the full answer. The turn is
+        stored in the session only after generation completes.
+        """
+        retriever = self._retriever(options)
+        history = self.sessions.get(session_id) if session_id else []
+        state = await build_retrieval_chain(retriever, self.llm).ainvoke(
+            {"question": question, "chat_history": history}
+        )
+        yield StreamEvent(
+            "sources",
+            {
+                "question": question,
+                "standalone_question": state["standalone_question"],
+                "sources": source_refs(state["documents"]),
+            },
+        )
+        parts: list[str] = []
+        async for token in build_answer_chain(self.llm).astream(state):
+            parts.append(token)
+            yield StreamEvent("token", token)
+        answer = "".join(parts)
+        if session_id:
+            self.sessions.append_turn(session_id, question, answer)
+        yield StreamEvent("done", {"answer": answer, "session_id": session_id})
+
+    def _retriever(self, options: RetrievalOptions | None) -> BaseRetriever:
+        snapshot = self.index.snapshot
+        if snapshot.is_empty:
+            raise EmptyIndexError("the index is empty; ingest documents first")
+        return build_retriever(snapshot, options or self.default_options)
