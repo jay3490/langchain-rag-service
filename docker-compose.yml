@@ -1,0 +1,38 @@
+# Default: the API with the credential-free fake provider.
+#   docker compose up --build
+#
+# With a local Ollama server (OpenAI-compatible endpoint):
+#   RAG_PROVIDER=openai docker compose --profile ollama up --build
+#   docker compose exec ollama ollama pull llama3.2
+#   docker compose exec ollama ollama pull nomic-embed-text
+# then restart the api service so it ingests with the new embeddings.
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      RAG_PROVIDER: ${RAG_PROVIDER:-fake}
+      RAG_OPENAI_BASE_URL: ${RAG_OPENAI_BASE_URL:-http://ollama:11434/v1}
+      RAG_OPENAI_API_KEY: ${RAG_OPENAI_API_KEY:-}
+      RAG_CHAT_MODEL: ${RAG_CHAT_MODEL:-llama3.2}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-nomic-embed-text}
+      # One index per provider: an index is tied to the embedding model that built it.
+      RAG_INDEX_DIR: /app/var/index-${RAG_PROVIDER:-fake}
+    volumes:
+      - rag-var:/app/var
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  rag-var:
+  ollama-models:

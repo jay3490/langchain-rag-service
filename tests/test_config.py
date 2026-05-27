@@ -40,3 +40,15 @@ def test_fetch_k_must_cover_top_k() -> None:
 def test_fusion_needs_a_positive_weight() -> None:
     with pytest.raises(ValidationError, match="weight"):
         Settings(_env_file=None, dense_weight=0, bm25_weight=0)
+
+
+def test_blank_values_count_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_OPENAI_API_KEY", "")
+    monkeypatch.setenv("RAG_OPENAI_BASE_URL", " ")
+    monkeypatch.setenv("RAG_INGEST_ON_STARTUP", "")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.openai_api_key is None
+    assert settings.openai_base_url is None
+    assert settings.ingest_on_startup is None

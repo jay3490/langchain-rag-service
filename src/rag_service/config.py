@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Provider = Literal["fake", "openai"]
@@ -67,6 +67,14 @@ class Settings(BaseSettings):
 
     # Conversation --------------------------------------------------------
     max_history_messages: int = Field(default=10, ge=0)
+
+    @field_validator("openai_base_url", "openai_api_key", "ingest_on_startup", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        """Treat empty strings (e.g. ``VAR=`` in compose files) as not configured."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Settings:
