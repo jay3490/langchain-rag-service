@@ -25,7 +25,7 @@ from rag_service.ingestion import load_directory, split_documents
 from rag_service.providers import build_embeddings
 from rag_service.retrieval import RetrievalOptions, build_retriever
 from rag_service.service import embedding_id
-from rag_service.store import DocumentIndex
+from rag_service.store import FaissIndex
 
 MODES: tuple[RetrieverMode, ...] = ("dense", "bm25", "hybrid")
 
@@ -131,7 +131,7 @@ def run(
     embeddings = build_embeddings(settings)
     chunks = split_documents(load_directory(docs), settings.chunk_size, settings.chunk_overlap)
     with tempfile.TemporaryDirectory(prefix="rag-eval-") as tmp:
-        index = DocumentIndex(Path(tmp), embeddings, embedding_id(settings))
+        index = FaissIndex(Path(tmp), embeddings, embedding_id(settings))
         index.add(chunks)
         base = RetrievalOptions.from_settings(settings).with_overrides(
             k=k, fetch_k=max(k, settings.fetch_k)

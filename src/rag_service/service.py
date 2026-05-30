@@ -24,7 +24,7 @@ from rag_service.ingestion import load_bytes, load_directory, safe_source_name, 
 from rag_service.memory import SessionStore
 from rag_service.providers import build_chat_model, build_embeddings
 from rag_service.retrieval import RetrievalOptions, build_retriever
-from rag_service.store import DocumentIndex, IngestResult
+from rag_service.store import FaissIndex, IngestResult
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class RagService:
         self.settings = settings
         self.embeddings = embeddings or build_embeddings(settings)
         self.llm = llm or build_chat_model(settings)
-        self.index = DocumentIndex(settings.index_dir, self.embeddings, embedding_id(settings))
+        self.index = FaissIndex(settings.index_dir, self.embeddings, embedding_id(settings))
         self.sessions = SessionStore(max_messages=settings.max_history_messages)
         self.default_options = RetrievalOptions.from_settings(settings)
 

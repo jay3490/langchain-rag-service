@@ -14,7 +14,9 @@ from pydantic import BaseModel, Field
 
 from rag_service import __version__
 from rag_service.config import RetrieverMode, SearchType, Settings, get_settings
+from rag_service.filters import TENANT_KEY, FilterValue, MetadataFilter
 from rag_service.ingestion import UnsupportedFileError
+from rag_service.retrieval import RetrievalOptions
 from rag_service.service import EmptyIndexError, PathOutsideRootError, RagService
 from rag_service.store import IngestResult
 
@@ -32,6 +34,19 @@ class QueryRequest(BaseModel):
     k: int | None = Field(default=None, ge=1, le=50)
     retriever_mode: RetrieverMode | None = None
     search_type: SearchType | None = None
+    filters: dict[str, FilterValue] | None = Field(
+        default=None,
+        description=(
+            "Metadata conditions every retrieved chunk must meet, e.g. "
+            '{"source": ["bm25.md", "mmr.md"]}. A list means any of its values.'
+        ),
+    )
+
+    def metadata_filter(self) -> MetadataFilter:
+        try:
+            return MetadataFilter.from_mapping(self.filters)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 class Source(BaseModel):
@@ -104,6 +119,24 @@ def require_documents(service: ServiceDep) -> None:
     """Fail with 409 before a stream starts if nothing has been ingested."""
     if service.index.snapshot.is_empty:
         raise HTTPException(status.HTTP_409_CONFLICT, "the index is empty; ingest documents first")
+
+
+def request_options(service: ServiceDep, body: QueryRequest) -> RetrievalOptions:
+    """Per-request retrieval options; validated before a stream starts."""
+    metadata_filter = body.metadata_filter()
+    if TENANT_KEY in set(metadata_filter.keys()):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"{TENANT_KEY!r} cannot be filtered on"
+        )
+    return service.options(
+        k=body.k,
+        mode=body.retriever_mode,
+        search_type=body.search_type,
+        metadata_filter=metadata_filter,
+    )
+
+
+OptionsDep = Annotated[RetrievalOptions, Depends(request_options)]
 
 
 def _ingest_response(service: RagService, result: IngestResult) -> IngestResponse:
@@ -186,8 +219,7 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown source: {source}")
 
     @app.post("/query", response_model=QueryResponse, tags=["query"])
-    async def query(service: ServiceDep, body: QueryRequest) -> QueryResponse:
-        options = service.options(k=body.k, mode=body.retriever_mode, search_type=body.search_type)
+    async def query(service: ServiceDep, body: QueryRequest, options: OptionsDep) -> QueryResponse:
         try:
             result = await service.answer(
                 body.question, session_id=body.session_id, options=options
@@ -203,7 +235,7 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
         tags=["query"],
     )
     async def query_stream(
-        service: ServiceDep, body: QueryRequest
+        service: ServiceDep, body: QueryRequest, options: OptionsDep
     ) -> AsyncIterator[ServerSentEvent]:
         """Stream the answer as Server-Sent Events.
 
@@ -211,7 +243,6 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
         one ``token`` per generated text chunk, then ``done`` with the full answer. A
         failure after the stream has started is reported as an ``error`` event.
         """
-        options = service.options(k=body.k, mode=body.retriever_mode, search_type=body.search_type)
         try:
             async for item in service.stream_answer(
                 body.question, session_id=body.session_id, options=options

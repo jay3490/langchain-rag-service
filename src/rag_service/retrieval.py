@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from langchain_community.vectorstores import FAISS
 from langchain_core.callbacks import (
     AsyncCallbackManagerForRetrieverRun,
     CallbackManagerForRetrieverRun,
 )
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.vectorstores import VectorStore
 from pydantic import ConfigDict, Field, model_validator
 
 from rag_service.config import RetrieverMode, SearchType, Settings
+from rag_service.filters import MetadataFilter
 from rag_service.store import IndexSnapshot
 from rag_service.text import tokenize
 
@@ -35,6 +36,7 @@ class BM25Retriever(BaseRetriever):
 
     snapshot: IndexSnapshot
     k: int = Field(default=4, ge=1)
+    metadata_filter: MetadataFilter = Field(default_factory=MetadataFilter)
 
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
@@ -44,11 +46,16 @@ class BM25Retriever(BaseRetriever):
         if bm25 is None or not tokens:
             return []
         scores = bm25.get_scores(tokens)
-        ranked = sorted(range(len(scores)), key=lambda i: (-scores[i], i))
+        chunks = self.snapshot.chunks
+        candidates = [
+            i
+            for i in range(len(scores))
+            if scores[i] > 0 and self.metadata_filter.matches(chunks[i].metadata)
+        ]
+        ranked = sorted(candidates, key=lambda i: (-scores[i], i))
         return [
-            _with_metadata(self.snapshot.chunks[i], bm25_score=round(float(scores[i]), 6))
+            _with_metadata(chunks[i], bm25_score=round(float(scores[i]), 6))
             for i in ranked[: self.k]
-            if scores[i] > 0
         ]
 
 
@@ -137,6 +144,7 @@ class RetrievalOptions:
     rrf_k: int = 60
     dense_weight: float = 1.0
     bm25_weight: float = 1.0
+    metadata_filter: MetadataFilter = field(default_factory=MetadataFilter)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> RetrievalOptions:
@@ -156,10 +164,16 @@ class RetrievalOptions:
         return replace(self, **{key: value for key, value in changes.items() if value is not None})
 
 
-def _dense(vectorstore: FAISS, options: RetrievalOptions, k: int) -> BaseRetriever:
+def _dense(
+    snapshot: IndexSnapshot, vectorstore: VectorStore, options: RetrievalOptions, k: int
+) -> BaseRetriever:
     search_kwargs: dict[str, Any] = {"k": k}
     if options.search_type == "mmr":
         search_kwargs |= {"fetch_k": max(options.fetch_k, k), "lambda_mult": options.mmr_lambda}
+    if not options.metadata_filter.is_empty:
+        search_kwargs["filter"] = snapshot.dense_filter(options.metadata_filter)
+        # FAISS filters after the nearest-neighbour search, so it needs a deeper pool.
+        search_kwargs["fetch_k"] = max(search_kwargs.get("fetch_k", 0), options.fetch_k, 4 * k)
     return vectorstore.as_retriever(search_type=options.search_type, search_kwargs=search_kwargs)
 
 
@@ -167,18 +181,23 @@ def build_retriever(snapshot: IndexSnapshot, options: RetrievalOptions) -> BaseR
     """Create the retriever described by ``options`` for ``snapshot``.
 
     In hybrid mode each side contributes up to ``2 * k`` candidates (capped at
-    ``fetch_k``) before fusion trims the result to ``k``.
+    ``fetch_k``) before fusion trims the result to ``k``. ``options.metadata_filter`` is
+    applied by both the dense and the lexical side.
     """
     vectorstore = snapshot.vectorstore
     if snapshot.is_empty or vectorstore is None:
         return EmptyRetriever()
+    lexical_filter = options.metadata_filter
     if options.mode == "dense":
-        return _dense(vectorstore, options, options.k)
+        return _dense(snapshot, vectorstore, options, options.k)
     if options.mode == "bm25":
-        return BM25Retriever(snapshot=snapshot, k=options.k)
+        return BM25Retriever(snapshot=snapshot, k=options.k, metadata_filter=lexical_filter)
     depth = max(options.k, min(options.fetch_k, 2 * options.k))
     return HybridRetriever(
-        retrievers=[_dense(vectorstore, options, depth), BM25Retriever(snapshot=snapshot, k=depth)],
+        retrievers=[
+            _dense(snapshot, vectorstore, options, depth),
+            BM25Retriever(snapshot=snapshot, k=depth, metadata_filter=lexical_filter),
+        ],
         weights=[options.dense_weight, options.bm25_weight],
         k=options.k,
         rrf_k=options.rrf_k,

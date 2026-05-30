@@ -180,3 +180,24 @@ def test_ingest_on_startup(settings: Settings) -> None:
     settings.ingest_on_startup = SAMPLE_DOCS
     with TestClient(create_app(settings)) as client:
         assert client.get("/health").json()["chunks"] > 0
+
+
+def test_query_filters_restrict_sources(loaded: TestClient) -> None:
+    body = loaded.post(
+        "/query",
+        json={
+            "question": "What value is the RRF constant k commonly set to?",
+            "filters": {"source": ["bm25.md", "glossary.txt"]},
+        },
+    ).json()
+    assert body["sources"]
+    assert {s["source"] for s in body["sources"]} <= {"bm25.md", "glossary.txt"}
+
+
+@pytest.mark.parametrize(
+    "filters", [{"tenant_id": "someone-else"}, {"source": 1.5}, {"source": []}]
+)
+def test_query_rejects_bad_filters(loaded: TestClient, filters: dict[str, object]) -> None:
+    payload = {"question": "anything", "filters": filters}
+    assert loaded.post("/query", json=payload).status_code == 422
+    assert loaded.post("/query/stream", json=payload).status_code == 422

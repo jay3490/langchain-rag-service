@@ -6,6 +6,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.vectorstores import VectorStoreRetriever
 
+from rag_service.filters import MetadataFilter
 from rag_service.ingestion import load_directory, split_documents
 from rag_service.providers import HashingEmbeddings
 from rag_service.retrieval import (
@@ -16,7 +17,7 @@ from rag_service.retrieval import (
     build_retriever,
     reciprocal_rank_fusion,
 )
-from rag_service.store import DocumentIndex, IndexSnapshot
+from rag_service.store import FaissIndex, IndexSnapshot
 from tests.helpers import SAMPLE_DOCS
 
 
@@ -98,9 +99,7 @@ def test_hybrid_retriever_async_matches_sync() -> None:
 
 @pytest.fixture(scope="module")
 def corpus_snapshot(tmp_path_factory: pytest.TempPathFactory) -> IndexSnapshot:
-    index = DocumentIndex(
-        tmp_path_factory.mktemp("index") / "idx", HashingEmbeddings(), "fake:test"
-    )
+    index = FaissIndex(tmp_path_factory.mktemp("index") / "idx", HashingEmbeddings(), "fake:test")
     index.add(split_documents(load_directory(SAMPLE_DOCS), 600, 80))
     return index.snapshot
 
@@ -158,3 +157,24 @@ def test_options_overrides_ignore_none() -> None:
     options = RetrievalOptions(k=4).with_overrides(k=None, search_type="mmr")
     assert options.k == 4
     assert options.search_type == "mmr"
+
+
+@pytest.mark.parametrize("mode", ["dense", "bm25", "hybrid"])
+@pytest.mark.parametrize("search_type", ["similarity", "mmr"])
+def test_metadata_filter_applies_to_every_mode(
+    corpus_snapshot: IndexSnapshot, mode: str, search_type: str
+) -> None:
+    options = RetrievalOptions(
+        mode=mode,  # type: ignore[arg-type]
+        search_type=search_type,  # type: ignore[arg-type]
+        k=3,
+        metadata_filter=MetadataFilter.from_mapping({"source": ["mmr.md", "glossary.txt"]}),
+    )
+    results = build_retriever(corpus_snapshot, options).invoke("reciprocal rank fusion constant k")
+
+    assert results
+    assert {d.metadata["source"] for d in results} <= {"mmr.md", "glossary.txt"}
+
+
+def test_chunks_are_stamped_with_the_index_tenant(corpus_snapshot: IndexSnapshot) -> None:
+    assert {c.metadata["tenant_id"] for c in corpus_snapshot.chunks} == {"default"}
