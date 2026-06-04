@@ -171,9 +171,8 @@ def _dense(
     if options.search_type == "mmr":
         search_kwargs |= {"fetch_k": max(options.fetch_k, k), "lambda_mult": options.mmr_lambda}
     if not options.metadata_filter.is_empty:
-        search_kwargs["filter"] = snapshot.dense_filter(options.metadata_filter)
-        # FAISS filters after the nearest-neighbour search, so it needs a deeper pool.
-        search_kwargs["fetch_k"] = max(search_kwargs.get("fetch_k", 0), options.fetch_k, 4 * k)
+        depth = max(search_kwargs.get("fetch_k", 0), options.fetch_k, 4 * k)
+        search_kwargs |= snapshot.dense_filter(options.metadata_filter, depth)
     return vectorstore.as_retriever(search_type=options.search_type, search_kwargs=search_kwargs)
 
 

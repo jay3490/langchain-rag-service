@@ -24,6 +24,8 @@ dependencies = [
     "pydantic-settings>=2.16",
     "python-multipart>=0.0.32",
     "pypdf>=6.0",
+    "qdrant-client>=1.15",
+    "langchain-qdrant>=1.1,<2",
 ]
 
 [project.scripts]

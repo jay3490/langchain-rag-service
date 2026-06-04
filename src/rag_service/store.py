@@ -31,17 +31,19 @@ MANIFEST_FILE = "manifest.json"
 FAISS_FILES = ("index.faiss", "index.pkl")
 DEFAULT_TENANT = "default"
 
-#: Turns a :class:`MetadataFilter` into the ``filter`` argument of a vector store search.
-DenseFilter = Callable[[MetadataFilter], Any]
+#: Turns a :class:`MetadataFilter` and a candidate depth into vector-search keyword
+#: arguments (``filter`` and, where the backend needs it, ``fetch_k``).
+DenseFilter = Callable[[MetadataFilter, int], dict[str, Any]]
 
 
 class IndexCompatibilityError(RuntimeError):
     """The stored index was built with a different embedding model."""
 
 
-def faiss_filter(metadata_filter: MetadataFilter) -> Callable[[dict[str, Any]], bool]:
-    """FAISS accepts a predicate over chunk metadata."""
-    return metadata_filter.matches
+def faiss_filter(metadata_filter: MetadataFilter, depth: int) -> dict[str, Any]:
+    """FAISS takes a metadata predicate and applies it after the nearest-neighbour search,
+    so it searches ``depth`` candidates to have enough left after filtering."""
+    return {"filter": metadata_filter.matches, "fetch_k": depth}
 
 
 @dataclass(frozen=True)
@@ -130,6 +132,13 @@ class DocumentIndex(ABC):
     @abstractmethod
     def load(self) -> None:
         """Load previously stored chunks, if there are any."""
+
+    def sync(self) -> bool:
+        """Pick up writes made by another process; returns whether anything changed.
+
+        Backends whose data only this process writes have nothing to do.
+        """
+        return False
 
     @abstractmethod
     def _write(self, changed: list[Document], stale: list[str]) -> IndexSnapshot:

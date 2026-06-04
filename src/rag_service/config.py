@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 Provider = Literal["fake", "openai"]
 SearchType = Literal["similarity", "mmr"]
 RetrieverMode = Literal["dense", "bm25", "hybrid"]
+VectorStoreKind = Literal["faiss", "qdrant"]
 
 
 class Settings(BaseSettings):
@@ -45,7 +46,25 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535)
 
     # Storage and ingestion -----------------------------------------------
-    index_dir: Path = Path("var/index")
+    vector_store: VectorStoreKind = "faiss"
+    index_dir: Path = Field(
+        default=Path("var/index"),
+        description="Where the FAISS index (or local Qdrant data) is stored.",
+    )
+    qdrant_url: str | None = Field(
+        default=None,
+        description=(
+            "Qdrant server URL, or ':memory:' for an in-process store. "
+            "Unset means an on-disk local store under index_dir/qdrant."
+        ),
+    )
+    qdrant_api_key: SecretStr | None = None
+    qdrant_collection_prefix: str = Field(default="rag_", pattern=r"^[A-Za-z0-9_-]*$")
+    qdrant_sync_seconds: float = Field(
+        default=5.0,
+        ge=0.0,
+        description="How often a replica checks Qdrant for writes made by other replicas.",
+    )
     ingest_root: Path = Field(
         default=Path("data"),
         description="Directory ingestion through the API is restricted to this tree.",
@@ -68,7 +87,14 @@ class Settings(BaseSettings):
     # Conversation --------------------------------------------------------
     max_history_messages: int = Field(default=10, ge=0)
 
-    @field_validator("openai_base_url", "openai_api_key", "ingest_on_startup", mode="before")
+    @field_validator(
+        "openai_base_url",
+        "openai_api_key",
+        "ingest_on_startup",
+        "qdrant_url",
+        "qdrant_api_key",
+        mode="before",
+    )
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
         """Treat empty strings (e.g. ``VAR=`` in compose files) as not configured."""

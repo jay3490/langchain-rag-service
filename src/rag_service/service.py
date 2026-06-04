@@ -20,11 +20,12 @@ from rag_service.chain import (
     source_refs,
 )
 from rag_service.config import Settings
+from rag_service.indexes import build_index_factory
 from rag_service.ingestion import load_bytes, load_directory, safe_source_name, split_documents
 from rag_service.memory import SessionStore
 from rag_service.providers import build_chat_model, build_embeddings
 from rag_service.retrieval import RetrievalOptions, build_retriever
-from rag_service.store import FaissIndex, IngestResult
+from rag_service.store import DEFAULT_TENANT, IngestResult
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,8 @@ class RagService:
         self.settings = settings
         self.embeddings = embeddings or build_embeddings(settings)
         self.llm = llm or build_chat_model(settings)
-        self.index = FaissIndex(settings.index_dir, self.embeddings, embedding_id(settings))
+        factory = build_index_factory(settings, self.embeddings, embedding_id(settings))
+        self.index = factory(DEFAULT_TENANT)
         self.sessions = SessionStore(max_messages=settings.max_history_messages)
         self.default_options = RetrievalOptions.from_settings(settings)
 
@@ -167,6 +169,7 @@ class RagService:
         yield StreamEvent("done", {"answer": answer, "session_id": session_id})
 
     def _retriever(self, options: RetrievalOptions | None) -> BaseRetriever:
+        self.index.sync()
         snapshot = self.index.snapshot
         if snapshot.is_empty:
             raise EmptyIndexError("the index is empty; ingest documents first")
