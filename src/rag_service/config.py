@@ -9,6 +9,8 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from rag_service.auth import TENANT_PATTERN, validate_key_digests
+
 Provider = Literal["fake", "openai"]
 SearchType = Literal["similarity", "mmr"]
 RetrieverMode = Literal["dense", "bm25", "hybrid"]
@@ -45,11 +47,21 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
 
+    # Tenancy -------------------------------------------------------------
+    api_keys: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "JSON object mapping the SHA-256 hex digest of each API key to its tenant id. "
+            "Empty disables authentication; every request then uses default_tenant."
+        ),
+    )
+    default_tenant: str = Field(default="default", pattern=TENANT_PATTERN)
+
     # Storage and ingestion -----------------------------------------------
     vector_store: VectorStoreKind = "faiss"
     index_dir: Path = Field(
         default=Path("var/index"),
-        description="Where the FAISS index (or local Qdrant data) is stored.",
+        description="FAISS indexes, one subdirectory per tenant; also local Qdrant data.",
     )
     qdrant_url: str | None = Field(
         default=None,
@@ -70,6 +82,11 @@ class Settings(BaseSettings):
         description="Directory ingestion through the API is restricted to this tree.",
     )
     ingest_on_startup: Path | None = None
+    startup_tenant: str | None = Field(
+        default=None,
+        pattern=TENANT_PATTERN,
+        description="Tenant that receives the startup ingest; defaults to default_tenant.",
+    )
     max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
     chunk_size: int = Field(default=800, ge=50)
     chunk_overlap: int = Field(default=120, ge=0)
@@ -101,6 +118,11 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("api_keys")
+    @classmethod
+    def _check_api_keys(cls, value: dict[str, str]) -> dict[str, str]:
+        return validate_key_digests(value)
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Settings:
