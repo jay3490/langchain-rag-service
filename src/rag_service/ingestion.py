@@ -29,6 +29,15 @@ def safe_source_name(filename: str) -> str:
     return name
 
 
+def checked_source_name(filename: str) -> str:
+    """:func:`safe_source_name`, also refusing file types that cannot be ingested."""
+    name = safe_source_name(filename)
+    if PurePath(name).suffix.lower() not in SUPPORTED_SUFFIXES:
+        supported = ", ".join(sorted(SUPPORTED_SUFFIXES))
+        raise UnsupportedFileError(f"{name}: unsupported file type (expected one of {supported})")
+    return name
+
+
 def load_bytes(source: str, data: bytes) -> list[Document]:
     """Turn the raw bytes of one file into documents.
 

@@ -91,6 +91,23 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=800, ge=50)
     chunk_overlap: int = Field(default=120, ge=0)
 
+    # Background ingestion ------------------------------------------------
+    ingest_worker: bool = Field(
+        default=True, description="Run the background ingestion worker in this process."
+    )
+    jobs_database_url: str | None = Field(
+        default=None,
+        description="SQLAlchemy URL of the job table; unset means SQLite in index_dir.",
+    )
+    job_max_attempts: int = Field(default=3, ge=1, le=20)
+    job_retry_backoff_seconds: float = Field(default=2.0, ge=0.0)
+    job_poll_seconds: float = Field(default=1.0, gt=0.0)
+    job_idempotency_seconds: float = Field(
+        default=24 * 3600.0,
+        ge=0.0,
+        description="How long a succeeded job answers resubmissions of the same upload.",
+    )
+
     # Retrieval -----------------------------------------------------------
     retriever_mode: RetrieverMode = "hybrid"
     search_type: SearchType = "similarity"
@@ -110,6 +127,7 @@ class Settings(BaseSettings):
         "ingest_on_startup",
         "qdrant_url",
         "qdrant_api_key",
+        "jobs_database_url",
         mode="before",
     )
     @classmethod

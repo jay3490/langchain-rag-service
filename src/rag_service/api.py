@@ -5,10 +5,22 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Security, UploadFile, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    Security,
+    UploadFile,
+    status,
+)
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
@@ -17,7 +29,8 @@ from rag_service import __version__
 from rag_service.auth import ApiKeyAuthenticator
 from rag_service.config import RetrieverMode, SearchType, Settings, VectorStoreKind, get_settings
 from rag_service.filters import TENANT_KEY, FilterValue, MetadataFilter
-from rag_service.ingestion import UnsupportedFileError
+from rag_service.ingestion import UnsupportedFileError, checked_source_name
+from rag_service.jobs import IngestWorker, Job, JobStatus, JobStore, create_job_engine, sqlite_url
 from rag_service.retrieval import RetrievalOptions
 from rag_service.service import EmptyIndexError, PathOutsideRootError, RagService
 from rag_service.store import IngestResult
@@ -105,6 +118,40 @@ class Message(BaseModel):
     content: str
 
 
+class JobResponse(BaseModel):
+    id: str
+    status: JobStatus
+    attempts: int
+    max_attempts: int
+    files: list[str]
+    content_hash: str = Field(description="SHA-256 over the uploaded names and contents.")
+    error: str | None = None
+    result: dict[str, Any] | None = Field(
+        default=None, description="Ingest summary once the job has succeeded."
+    )
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def of(cls, job: Job) -> JobResponse:
+        return cls(
+            id=job.id,
+            status=job.status,
+            attempts=job.attempts,
+            max_attempts=job.max_attempts,
+            files=job.files,
+            content_hash=job.content_hash,
+            error=job.error,
+            result=job.result,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+        )
+
+
+class JobListResponse(BaseModel):
+    jobs: list[JobResponse]
+
+
 class SessionResponse(BaseModel):
     session_id: str
     messages: list[Message]
@@ -167,6 +214,37 @@ def request_options(service: ServiceDep, body: QueryRequest) -> RetrievalOptions
 OptionsDep = Annotated[RetrievalOptions, Depends(request_options)]
 
 
+def get_jobs(request: Request) -> JobStore:
+    return request.app.state.jobs
+
+
+JobsDep = Annotated[JobStore, Depends(get_jobs)]
+
+
+def read_uploads(files: list[UploadFile], limit: int) -> list[tuple[str, bytes]]:
+    """Read each upload, refusing any larger than ``limit`` bytes (413)."""
+    payload: list[tuple[str, bytes]] = []
+    for upload in files:
+        data = upload.file.read(limit + 1)
+        if len(data) > limit:
+            raise HTTPException(
+                status.HTTP_413_CONTENT_TOO_LARGE,
+                f"{upload.filename} exceeds the {limit}-byte upload limit",
+            )
+        payload.append((upload.filename or "", data))
+    return payload
+
+
+def build_job_store(settings: Settings) -> JobStore:
+    url = settings.jobs_database_url or sqlite_url(settings.index_dir / "jobs.sqlite3")
+    return JobStore(
+        create_job_engine(url),
+        max_attempts=settings.job_max_attempts,
+        retry_backoff_seconds=settings.job_retry_backoff_seconds,
+        idempotency_seconds=settings.job_idempotency_seconds,
+    )
+
+
 def _ingest_response(service: RagService, tenant: str, result: IngestResult) -> IngestResponse:
     return IngestResponse(
         sources=result.sources,
@@ -190,7 +268,21 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
                 rag.default_tenant,
             )
         rag.start()
-        yield
+        jobs = build_job_store(rag.settings)
+        app.state.jobs = jobs
+        worker = IngestWorker(
+            jobs,
+            lambda tenant, files: rag.ingest_files(files, tenant_id=tenant),
+            poll_seconds=rag.settings.job_poll_seconds,
+        )
+        app.state.worker = worker
+        if rag.settings.ingest_worker:
+            worker.start()
+        try:
+            yield
+        finally:
+            await worker.stop()
+            jobs.close()
 
     app = FastAPI(
         title="langchain-rag-service",
@@ -217,16 +309,7 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
     def ingest_files(
         service: ServiceDep, tenant: TenantDep, files: Annotated[list[UploadFile], File()]
     ) -> IngestResponse:
-        limit = service.settings.max_upload_bytes
-        payload: list[tuple[str, bytes]] = []
-        for upload in files:
-            data = upload.file.read(limit + 1)
-            if len(data) > limit:
-                raise HTTPException(
-                    status.HTTP_413_CONTENT_TOO_LARGE,
-                    f"{upload.filename} exceeds the {limit}-byte upload limit",
-                )
-            payload.append((upload.filename or "", data))
+        payload = read_uploads(files, service.settings.max_upload_bytes)
         try:
             result = service.ingest_files(payload, tenant_id=tenant)
         except UnsupportedFileError as exc:
@@ -246,6 +329,52 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
                 status.HTTP_404_NOT_FOUND, f"no such directory: {body.path}"
             ) from exc
         return _ingest_response(service, tenant, result)
+
+    @app.post(
+        "/jobs/ingest",
+        response_model=JobResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        tags=["jobs"],
+        responses={200: {"model": JobResponse, "description": "Same upload already queued"}},
+    )
+    def submit_ingest_job(
+        service: ServiceDep,
+        tenant: TenantDep,
+        jobs: JobsDep,
+        request: Request,
+        response: Response,
+        files: Annotated[list[UploadFile], File()],
+    ) -> JobResponse:
+        """Queue files for background ingestion and return the job at once.
+
+        Re-submitting an upload whose job is still queued, running or recently
+        succeeded returns that job with status 200 instead of creating another.
+        """
+        payload = read_uploads(files, service.settings.max_upload_bytes)
+        try:
+            payload = [(checked_source_name(name), data) for name, data in payload]
+        except UnsupportedFileError as exc:
+            raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc)) from exc
+        job, created = jobs.submit(tenant, payload)
+        if created:
+            request.app.state.worker.notify()
+        else:
+            response.status_code = status.HTTP_200_OK
+        response.headers["Location"] = f"/jobs/{job.id}"
+        return JobResponse.of(job)
+
+    @app.get("/jobs/{job_id}", response_model=JobResponse, tags=["jobs"])
+    def get_job(tenant: TenantDep, jobs: JobsDep, job_id: str) -> JobResponse:
+        job = jobs.get(job_id, tenant)
+        if job is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown job: {job_id}")
+        return JobResponse.of(job)
+
+    @app.get("/jobs", response_model=JobListResponse, tags=["jobs"])
+    def list_jobs(
+        tenant: TenantDep, jobs: JobsDep, limit: Annotated[int, Query(ge=1, le=100)] = 20
+    ) -> JobListResponse:
+        return JobListResponse(jobs=[JobResponse.of(job) for job in jobs.list(tenant, limit)])
 
     @app.get("/documents", response_model=DocumentsResponse, tags=["ingest"])
     def list_documents(service: ServiceDep, tenant: TenantDep) -> DocumentsResponse:
