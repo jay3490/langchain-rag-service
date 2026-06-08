@@ -49,6 +49,9 @@ class QueryRequest(BaseModel):
     k: int | None = Field(default=None, ge=1, le=50)
     retriever_mode: RetrieverMode | None = None
     search_type: SearchType | None = None
+    rerank: bool | None = Field(
+        default=None, description="Set false to skip the configured reranker for this query."
+    )
     filters: dict[str, FilterValue] | None = Field(
         default=None,
         description=(
@@ -73,6 +76,9 @@ class Source(BaseModel):
     start_index: int | None = None
     score: float | None = Field(
         default=None, description="RRF score (hybrid) or BM25 score; absent for dense search."
+    )
+    rerank_score: float | None = Field(
+        default=None, description="Reranker relevance in [0, 1] when re-ranking ran."
     )
     snippet: str
 
@@ -207,6 +213,7 @@ def request_options(service: ServiceDep, body: QueryRequest) -> RetrievalOptions
         k=body.k,
         mode=body.retriever_mode,
         search_type=body.search_type,
+        rerank=body.rerank,
         metadata_filter=metadata_filter,
     )
 

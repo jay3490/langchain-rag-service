@@ -15,6 +15,7 @@ Provider = Literal["fake", "openai"]
 SearchType = Literal["similarity", "mmr"]
 RetrieverMode = Literal["dense", "bm25", "hybrid"]
 VectorStoreKind = Literal["faiss", "qdrant"]
+RerankerKind = Literal["none", "lexical", "llm", "cross-encoder"]
 
 
 class Settings(BaseSettings):
@@ -117,6 +118,14 @@ class Settings(BaseSettings):
     rrf_k: int = Field(default=60, ge=1)
     dense_weight: float = Field(default=1.0, ge=0.0)
     bm25_weight: float = Field(default=1.0, ge=0.0)
+
+    # Re-ranking ----------------------------------------------------------
+    reranker: RerankerKind = "none"
+    rerank_candidates: int = Field(
+        default=12, ge=1, le=100, description="Chunks retrieved for the reranker to score."
+    )
+    rerank_max_concurrency: int = Field(default=4, ge=1, le=64)
+    cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     # Conversation --------------------------------------------------------
     max_history_messages: int = Field(default=10, ge=0)

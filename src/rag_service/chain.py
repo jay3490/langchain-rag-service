@@ -34,6 +34,7 @@ class SourceRef(TypedDict):
     page: int | None
     start_index: int | None
     score: float | None
+    rerank_score: float | None
     snippet: str
 
 
@@ -60,6 +61,7 @@ def source_refs(documents: Sequence[Document]) -> list[SourceRef]:
                 page=metadata.get("page"),
                 start_index=metadata.get("start_index"),
                 score=float(score) if score is not None else None,
+                rerank_score=metadata.get("rerank_score"),
                 snippet=text[:SNIPPET_CHARS],
             )
         )

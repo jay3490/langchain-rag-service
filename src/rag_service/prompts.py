@@ -47,6 +47,20 @@ def rewrite_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages([("system", REWRITE_SYSTEM), ("human", REWRITE_HUMAN)])
 
 
+RERANK_SYSTEM = (
+    "You judge how useful a passage is for answering a search query.\n"
+    "Reply with a single integer from 0 to 10, where 0 means the passage is unrelated "
+    "and 10 means it directly answers the query. Reply with the number only."
+)
+
+RERANK_HUMAN = "<query>{query}</query>\n\n<passage>\n{passage}\n</passage>"
+
+
+def rerank_prompt() -> ChatPromptTemplate:
+    """Prompt that asks the chat model for a 0-10 relevance grade of one passage."""
+    return ChatPromptTemplate.from_messages([("system", RERANK_SYSTEM), ("human", RERANK_HUMAN)])
+
+
 def format_conversation(messages: Sequence[BaseMessage]) -> str:
     """Render chat history as ``user:``/``assistant:`` lines, one message per line."""
     roles = {"human": "user", "ai": "assistant"}

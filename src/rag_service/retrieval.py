@@ -145,6 +145,7 @@ class RetrievalOptions:
     dense_weight: float = 1.0
     bm25_weight: float = 1.0
     metadata_filter: MetadataFilter = field(default_factory=MetadataFilter)
+    rerank: bool = True
 
     @classmethod
     def from_settings(cls, settings: Settings) -> RetrievalOptions:

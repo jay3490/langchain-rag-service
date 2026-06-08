@@ -25,6 +25,7 @@ from rag_service.indexes import IndexRegistry, build_index_factory
 from rag_service.ingestion import load_bytes, load_directory, safe_source_name, split_documents
 from rag_service.memory import SessionStore
 from rag_service.providers import build_chat_model, build_embeddings
+from rag_service.rerank import Reranker, RerankingRetriever, build_reranker
 from rag_service.retrieval import RetrievalOptions, build_retriever
 from rag_service.store import DocumentIndex, IndexSnapshot, IngestResult
 
@@ -61,6 +62,7 @@ class RagService:
         *,
         embeddings: Embeddings | None = None,
         llm: BaseChatModel | None = None,
+        reranker: Reranker | None = None,
     ) -> None:
         self.settings = settings
         self.embeddings = embeddings or build_embeddings(settings)
@@ -70,6 +72,7 @@ class RagService:
         )
         self.sessions = SessionStore(max_messages=settings.max_history_messages)
         self.default_options = RetrievalOptions.from_settings(settings)
+        self.reranker = reranker or build_reranker(settings, self.llm)
 
     @property
     def default_tenant(self) -> str:
@@ -207,5 +210,14 @@ class RagService:
             raise EmptyIndexError("the index is empty; ingest documents first")
         options = options or self.default_options
         # Enforced on every query, whatever filter the client sent.
-        enforced = options.metadata_filter.with_condition(TENANT_KEY, tenant_id)
-        return build_retriever(snapshot, options.with_overrides(metadata_filter=enforced))
+        options = options.with_overrides(
+            metadata_filter=options.metadata_filter.with_condition(TENANT_KEY, tenant_id)
+        )
+        if self.reranker is None or not options.rerank:
+            return build_retriever(snapshot, options)
+        candidates = max(options.k, self.settings.rerank_candidates)
+        return RerankingRetriever(
+            base=build_retriever(snapshot, options.with_overrides(k=candidates)),
+            reranker=self.reranker,
+            k=options.k,
+        )

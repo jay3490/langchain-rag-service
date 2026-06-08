@@ -35,6 +35,9 @@ rag-eval = "rag_service.evaluation:main"
 rag-apikey = "rag_service.auth:main"
 
 [project.optional-dependencies]
+rerank = [
+    "sentence-transformers>=3.0",
+]
 dev = [
     "pytest>=9.0",
     "httpx>=0.28",

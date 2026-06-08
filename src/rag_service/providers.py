@@ -30,6 +30,8 @@ from rag_service.text import split_sentences, tokenize
 _SOURCE_BLOCK = re.compile(r'<source id="(\d+)"[^>]*>(.*?)</source>', re.DOTALL)
 _QUESTION_BLOCK = re.compile(r"<question>(.*?)</question>", re.DOTALL)
 _CONVERSATION_BLOCK = re.compile(r"<conversation>(.*?)</conversation>", re.DOTALL)
+_QUERY_BLOCK = re.compile(r"<query>(.*?)</query>", re.DOTALL)
+_PASSAGE_BLOCK = re.compile(r"<passage>(.*?)</passage>", re.DOTALL)
 _STREAM_PIECE = re.compile(r"\S+\s*")
 
 
@@ -87,7 +89,9 @@ class ExtractiveFakeChatModel(BaseChatModel):
       source sentence that shares the most tokens with the question, cited as ``[N]``;
       with no overlapping sentence it declines with :data:`NO_ANSWER`;
     * a prompt with a ``<conversation>`` block and a ``<question>`` (query rewriting)
-      is answered with the previous user question joined to the follow-up question.
+      is answered with the previous user question joined to the follow-up question;
+    * a prompt with a ``<query>`` and a ``<passage>`` (re-ranking) is answered with a
+      0-10 grade: the share of query words that occur in the passage.
     """
 
     max_sentences: int = Field(default=2, ge=1)
@@ -99,6 +103,10 @@ class ExtractiveFakeChatModel(BaseChatModel):
     def _respond(self, messages: list[BaseMessage]) -> str:
         human = [message for message in messages if isinstance(message, HumanMessage)]
         prompt = str(human[-1].content) if human else ""
+        query, passage = _QUERY_BLOCK.search(prompt), _PASSAGE_BLOCK.search(prompt)
+        if query is not None and passage is not None:
+            return self._grade(query.group(1), passage.group(1))
+
         question_match = _QUESTION_BLOCK.search(prompt)
         question = question_match.group(1).strip() if question_match else prompt.strip()
 
@@ -108,6 +116,14 @@ class ExtractiveFakeChatModel(BaseChatModel):
 
         sources = _SOURCE_BLOCK.findall(prompt)
         return self._extract(sources, question)
+
+    @staticmethod
+    def _grade(query: str, passage: str) -> str:
+        wanted = set(tokenize(query))
+        if not wanted:
+            return "0"
+        found = len(wanted & set(tokenize(passage)))
+        return str(round(10 * found / len(wanted)))
 
     @staticmethod
     def _rewrite(conversation: str, question: str) -> str:
