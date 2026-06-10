@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from operator import itemgetter
 from typing import Any, TypedDict
 
@@ -22,6 +22,9 @@ from rag_service.prompts import (
 )
 
 SNIPPET_CHARS = 240
+
+#: Trims a ranked list of retrieved chunks, e.g. to a token budget.
+DocumentFilter = Callable[[list[Document]], list[Document]]
 
 
 class SourceRef(TypedDict):
@@ -106,16 +109,20 @@ def build_rewrite_chain(llm: BaseChatModel) -> Runnable[dict[str, Any], str]:
 
 
 def build_retrieval_chain(
-    retriever: BaseRetriever, llm: BaseChatModel
+    retriever: BaseRetriever, llm: BaseChatModel, budget: DocumentFilter | None = None
 ) -> Runnable[dict[str, Any], dict[str, Any]]:
     """Add ``standalone_question`` and the retrieved ``documents`` to the input.
 
     The retriever searches with the standalone question, so follow-ups such as
     "what value is typical for it?" retrieve the chunks the conversation is about.
+    ``budget``, when given, trims the retrieved chunks before they reach the prompt.
     """
+    retrieve: Runnable[Any, list[Document]] = itemgetter("standalone_question") | retriever
+    if budget is not None:
+        retrieve = retrieve | RunnableLambda(budget, name="context_budget")
     return (
         RunnablePassthrough.assign(standalone_question=build_rewrite_chain(llm))
-        .assign(documents=itemgetter("standalone_question") | retriever)
+        .assign(documents=retrieve)
         .with_config(run_name="retrieve")
     )
 
@@ -130,11 +137,11 @@ def _to_result(state: dict[str, Any]) -> RagResult:
 
 
 def build_rag_chain(
-    llm: BaseChatModel, retriever: BaseRetriever
+    llm: BaseChatModel, retriever: BaseRetriever, budget: DocumentFilter | None = None
 ) -> Runnable[dict[str, Any], RagResult]:
     """Full pipeline: ``{"question", "chat_history"?}`` in, :class:`RagResult` out."""
     return (
-        build_retrieval_chain(retriever, llm)
+        build_retrieval_chain(retriever, llm, budget)
         | RunnablePassthrough.assign(answer=build_answer_chain(llm))
         | RunnableLambda(_to_result)
     ).with_config(run_name="rag")

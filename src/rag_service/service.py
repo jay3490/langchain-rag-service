@@ -12,6 +12,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
 
+from rag_service.budget import ContextBudget, get_token_counter
 from rag_service.chain import (
     RagResult,
     build_answer_chain,
@@ -73,6 +74,12 @@ class RagService:
         self.sessions = SessionStore(max_messages=settings.max_history_messages)
         self.default_options = RetrievalOptions.from_settings(settings)
         self.reranker = reranker or build_reranker(settings, self.llm)
+        self.tokens = get_token_counter(settings.tokenizer_encoding)
+        self.budget = (
+            ContextBudget(self.tokens, settings.max_context_tokens)
+            if settings.max_context_tokens
+            else None
+        )
 
     @property
     def default_tenant(self) -> str:
@@ -159,7 +166,7 @@ class RagService:
         retriever = self._retriever(tenant, options)
         session = self.session_key(tenant, session_id) if session_id else None
         history = self.sessions.get(session) if session else []
-        result = await build_rag_chain(self.llm, retriever).ainvoke(
+        result = await build_rag_chain(self.llm, retriever, self.budget).ainvoke(
             {"question": question, "chat_history": history}
         )
         if session:
@@ -184,7 +191,7 @@ class RagService:
         retriever = self._retriever(tenant, options)
         session = self.session_key(tenant, session_id) if session_id else None
         history = self.sessions.get(session) if session else []
-        state = await build_retrieval_chain(retriever, self.llm).ainvoke(
+        state = await build_retrieval_chain(retriever, self.llm, self.budget).ainvoke(
             {"question": question, "chat_history": history}
         )
         yield StreamEvent(

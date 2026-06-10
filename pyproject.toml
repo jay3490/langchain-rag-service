@@ -27,6 +27,7 @@ dependencies = [
     "qdrant-client>=1.15",
     "langchain-qdrant>=1.1,<2",
     "sqlalchemy>=2.0.36,<3",
+    "tiktoken>=0.8",
 ]
 
 [project.scripts]

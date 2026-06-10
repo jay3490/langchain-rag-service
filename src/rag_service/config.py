@@ -127,6 +127,16 @@ class Settings(BaseSettings):
     rerank_max_concurrency: int = Field(default=4, ge=1, le=64)
     cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
+    # Answer guardrails ---------------------------------------------------
+    max_context_tokens: int | None = Field(
+        default=3000,
+        ge=50,
+        description="Token budget for the retrieved context in the prompt; unset disables it.",
+    )
+    tokenizer_encoding: str = Field(
+        default="cl100k_base", description="tiktoken encoding used to count tokens."
+    )
+
     # Conversation --------------------------------------------------------
     max_history_messages: int = Field(default=10, ge=0)
 
@@ -137,6 +147,7 @@ class Settings(BaseSettings):
         "qdrant_url",
         "qdrant_api_key",
         "jobs_database_url",
+        "max_context_tokens",
         mode="before",
     )
     @classmethod
