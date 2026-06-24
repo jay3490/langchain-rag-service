@@ -29,6 +29,7 @@ from rag_service import __version__
 from rag_service.auth import ApiKeyAuthenticator
 from rag_service.config import RetrieverMode, SearchType, Settings, VectorStoreKind, get_settings
 from rag_service.filters import TENANT_KEY, FilterValue, MetadataFilter
+from rag_service.guardrails import Refusal
 from rag_service.ingestion import UnsupportedFileError, checked_source_name
 from rag_service.jobs import IngestWorker, Job, JobStatus, JobStore, create_job_engine, sqlite_url
 from rag_service.retrieval import RetrievalOptions
@@ -89,6 +90,16 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[Source]
     session_id: str | None = None
+    confidence: float = Field(
+        description="Retrieval confidence in [0, 1]: best rerank score or query-word coverage."
+    )
+    citations: list[int] = Field(description="Source ids cited in the answer.")
+    invalid_citations: list[int] = Field(
+        description="Cited numbers that matched no source; removed under the strip policy."
+    )
+    refusal: Refusal | None = Field(
+        default=None, description="Why the service declined to answer, if it did."
+    )
 
 
 class DirectoryIngestRequest(BaseModel):

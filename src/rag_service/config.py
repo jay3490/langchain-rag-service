@@ -16,6 +16,7 @@ SearchType = Literal["similarity", "mmr"]
 RetrieverMode = Literal["dense", "bm25", "hybrid"]
 VectorStoreKind = Literal["faiss", "qdrant"]
 RerankerKind = Literal["none", "lexical", "llm", "cross-encoder"]
+CitationPolicy = Literal["off", "strip", "refuse"]
 
 
 class Settings(BaseSettings):
@@ -135,6 +136,16 @@ class Settings(BaseSettings):
     )
     tokenizer_encoding: str = Field(
         default="cl100k_base", description="tiktoken encoding used to count tokens."
+    )
+    min_retrieval_confidence: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Decline without calling the model when retrieval confidence is lower.",
+    )
+    citation_policy: CitationPolicy = Field(
+        default="strip",
+        description="off: only report; strip: drop invalid [n]; refuse: decline instead.",
     )
 
     # Conversation --------------------------------------------------------

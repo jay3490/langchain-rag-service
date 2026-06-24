@@ -54,7 +54,18 @@ def test_rag_chain_output_shape() -> None:
 
     result = chain.invoke({"question": "What does k1 do in BM25?"})
 
-    assert set(result) == {"question", "standalone_question", "answer", "sources"}
+    assert set(result) == {
+        "question",
+        "standalone_question",
+        "answer",
+        "sources",
+        "confidence",
+        "citations",
+        "invalid_citations",
+        "refusal",
+    }
+    assert result["citations"] == [1]
+    assert result["refusal"] is None
     assert result["standalone_question"] == "What does k1 do in BM25?"
     assert result["answer"].endswith("[1]")
     assert [s["id"] for s in result["sources"]] == [1, 2]

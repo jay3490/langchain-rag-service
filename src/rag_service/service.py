@@ -22,6 +22,7 @@ from rag_service.chain import (
 )
 from rag_service.config import Settings
 from rag_service.filters import TENANT_KEY
+from rag_service.guardrails import Guardrails
 from rag_service.indexes import IndexRegistry, build_index_factory
 from rag_service.ingestion import load_bytes, load_directory, safe_source_name, split_documents
 from rag_service.memory import SessionStore
@@ -74,6 +75,10 @@ class RagService:
         self.sessions = SessionStore(max_messages=settings.max_history_messages)
         self.default_options = RetrievalOptions.from_settings(settings)
         self.reranker = reranker or build_reranker(settings, self.llm)
+        self.guardrails = Guardrails(
+            min_confidence=settings.min_retrieval_confidence,
+            citation_policy=settings.citation_policy,
+        )
         self.tokens = get_token_counter(settings.tokenizer_encoding)
         self.budget = (
             ContextBudget(self.tokens, settings.max_context_tokens)
@@ -166,7 +171,7 @@ class RagService:
         retriever = self._retriever(tenant, options)
         session = self.session_key(tenant, session_id) if session_id else None
         history = self.sessions.get(session) if session else []
-        result = await build_rag_chain(self.llm, retriever, self.budget).ainvoke(
+        result = await build_rag_chain(self.llm, retriever, self.budget, self.guardrails).ainvoke(
             {"question": question, "chat_history": history}
         )
         if session:
@@ -200,16 +205,26 @@ class RagService:
                 "question": question,
                 "standalone_question": state["standalone_question"],
                 "sources": source_refs(state["documents"]),
+                "confidence": round(float(state["confidence"]), 6),
             },
         )
         parts: list[str] = []
-        async for token in build_answer_chain(self.llm).astream(state):
+        async for token in build_answer_chain(self.llm, self.guardrails).astream(state):
             parts.append(token)
             yield StreamEvent("token", token)
-        answer = "".join(parts)
+        reviewed = self.guardrails.review("".join(parts), state["documents"], state["confidence"])
         if session:
-            self.sessions.append_turn(session, question, answer)
-        yield StreamEvent("done", {"answer": answer, "session_id": session_id})
+            self.sessions.append_turn(session, question, reviewed.answer)
+        yield StreamEvent(
+            "done",
+            {
+                "answer": reviewed.answer,
+                "session_id": session_id,
+                "citations": reviewed.citations,
+                "invalid_citations": reviewed.invalid_citations,
+                "refusal": reviewed.refusal,
+            },
+        )
 
     def _retriever(self, tenant_id: str, options: RetrievalOptions | None) -> BaseRetriever:
         snapshot = self.snapshot_for(tenant_id)
