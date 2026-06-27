@@ -13,6 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
 
 from rag_service.budget import ContextBudget, get_token_counter
+from rag_service.cache import Cache, CachedEmbeddings, build_cache
 from rag_service.chain import (
     RagResult,
     build_answer_chain,
@@ -65,9 +66,22 @@ class RagService:
         embeddings: Embeddings | None = None,
         llm: BaseChatModel | None = None,
         reranker: Reranker | None = None,
+        cache: Cache | None = None,
     ) -> None:
         self.settings = settings
-        self.embeddings = embeddings or build_embeddings(settings)
+        self.cache = cache or (build_cache(settings) if settings.cache_enabled else None)
+        base_embeddings = embeddings or build_embeddings(settings)
+        self.embeddings: Embeddings = (
+            CachedEmbeddings(
+                base_embeddings,
+                self.cache,
+                embedding_id(settings),
+                ttl=settings.embedding_cache_ttl_seconds,
+                prefix=settings.cache_prefix,
+            )
+            if self.cache is not None
+            else base_embeddings
+        )
         self.llm = llm or build_chat_model(settings)
         self.indexes = IndexRegistry(
             build_index_factory(settings, self.embeddings, embedding_id(settings))
@@ -98,6 +112,11 @@ class RagService:
         index = self.index_for(tenant_id)
         index.sync()
         return index.snapshot
+
+    def close(self) -> None:
+        """Release external connections (the cache)."""
+        if self.cache is not None:
+            self.cache.close()
 
     def start(self) -> None:
         """Load the default tenant's index and run the startup ingest, if configured."""

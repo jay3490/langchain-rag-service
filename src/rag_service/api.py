@@ -301,6 +301,7 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
         finally:
             await worker.stop()
             jobs.close()
+            rag.close()
 
     app = FastAPI(
         title="langchain-rag-service",

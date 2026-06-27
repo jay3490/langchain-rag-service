@@ -148,6 +148,18 @@ class Settings(BaseSettings):
         description="off: only report; strip: drop invalid [n]; refuse: decline instead.",
     )
 
+    # Caching -------------------------------------------------------------
+    cache_enabled: bool = True
+    redis_url: str | None = Field(
+        default=None,
+        description="redis://host:6379/0; unset or unreachable means an in-process cache.",
+    )
+    cache_prefix: str = Field(default="rag:", description="Prefix for every cache key.")
+    cache_max_entries: int = Field(
+        default=10_000, ge=1, description="Size of the in-process cache."
+    )
+    embedding_cache_ttl_seconds: float | None = Field(default=7 * 24 * 3600.0, gt=0)
+
     # Conversation --------------------------------------------------------
     max_history_messages: int = Field(default=10, ge=0)
 
@@ -159,6 +171,8 @@ class Settings(BaseSettings):
         "qdrant_api_key",
         "jobs_database_url",
         "max_context_tokens",
+        "redis_url",
+        "embedding_cache_ttl_seconds",
         mode="before",
     )
     @classmethod
