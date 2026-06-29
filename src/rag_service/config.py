@@ -159,6 +159,9 @@ class Settings(BaseSettings):
         default=10_000, ge=1, description="Size of the in-process cache."
     )
     embedding_cache_ttl_seconds: float | None = Field(default=7 * 24 * 3600.0, gt=0)
+    answer_cache_ttl_seconds: float | None = Field(
+        default=3600.0, gt=0, description="Unset disables the answer cache."
+    )
 
     # Conversation --------------------------------------------------------
     max_history_messages: int = Field(default=10, ge=0)
@@ -173,6 +176,7 @@ class Settings(BaseSettings):
         "max_context_tokens",
         "redis_url",
         "embedding_cache_ttl_seconds",
+        "answer_cache_ttl_seconds",
         mode="before",
     )
     @classmethod

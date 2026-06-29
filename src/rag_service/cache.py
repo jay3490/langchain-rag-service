@@ -9,13 +9,14 @@ a miss.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
 from abc import ABC, abstractmethod
 from array import array
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -254,3 +255,59 @@ class CachedEmbeddings(Embeddings):
         vector = self.embeddings.embed_query(text)
         self.cache.set(key, self._encode(vector), self.ttl)
         return vector
+
+
+_TRAILING_PUNCTUATION = "?!.;: "
+
+
+def normalize_question(question: str) -> str:
+    """Case-fold, collapse whitespace and drop trailing punctuation."""
+    return " ".join(question.casefold().split()).rstrip(_TRAILING_PUNCTUATION)
+
+
+class AnswerCache:
+    """Caches complete answers for first-turn questions.
+
+    The key covers the tenant, the normalised question, the metadata filter, every
+    retrieval and generation setting that can change the answer, and the version of the
+    tenant's index, so ingesting or deleting a document makes earlier entries
+    unreachable rather than stale.
+    """
+
+    def __init__(self, cache: Cache, *, ttl: float | None, prefix: str = "rag:") -> None:
+        self.cache = cache
+        self.ttl = ttl
+        self.prefix = f"{prefix}answer:"
+        self.stats = CacheStats("answer")
+
+    def key(
+        self,
+        *,
+        tenant_id: str,
+        question: str,
+        metadata_filter: dict[str, Any],
+        settings: dict[str, Any],
+        index_version: str,
+    ) -> str:
+        material = json.dumps(
+            {
+                "question": normalize_question(question),
+                "filter": metadata_filter,
+                "settings": settings,
+                "index": index_version,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        return f"{self.prefix}{tenant_id}:{digest(material)}"
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        raw = self.cache.get(key)
+        if raw is None:
+            self.stats.record(hits=0, misses=1)
+            return None
+        self.stats.record(hits=1, misses=0)
+        return dict(json.loads(raw))
+
+    def put(self, key: str, value: Mapping[str, Any]) -> None:
+        self.cache.set(key, json.dumps(value).encode(), self.ttl)

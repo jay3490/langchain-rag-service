@@ -51,6 +51,7 @@ class RagResult(TypedDict):
     citations: list[int]
     invalid_citations: list[int]
     refusal: Refusal | None
+    cached: bool
 
 
 def source_refs(documents: Sequence[Document]) -> list[SourceRef]:
@@ -153,6 +154,7 @@ def to_result(state: dict[str, Any], guardrails: Guardrails) -> RagResult:
         citations=reviewed.citations,
         invalid_citations=reviewed.invalid_citations,
         refusal=reviewed.refusal,
+        cached=False,
     )
 
 

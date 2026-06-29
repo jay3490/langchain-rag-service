@@ -63,6 +63,7 @@ def test_rag_chain_output_shape() -> None:
         "citations",
         "invalid_citations",
         "refusal",
+        "cached",
     }
     assert result["citations"] == [1]
     assert result["refusal"] is None

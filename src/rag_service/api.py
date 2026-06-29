@@ -100,6 +100,7 @@ class QueryResponse(BaseModel):
     refusal: Refusal | None = Field(
         default=None, description="Why the service declined to answer, if it did."
     )
+    cached: bool = Field(default=False, description="Served from the answer cache.")
 
 
 class DirectoryIngestRequest(BaseModel):
