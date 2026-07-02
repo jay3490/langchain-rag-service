@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     # HTTP server ----------------------------------------------------------
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_format: Literal["json", "text"] = "json"
 
     # Tenancy -------------------------------------------------------------
     api_keys: dict[str, str] = Field(

@@ -60,6 +60,7 @@ from sqlalchemy.orm import (
 )
 
 from rag_service.ingestion import UnsupportedFileError
+from rag_service.logging_setup import request_id_var
 from rag_service.store import IngestResult
 
 logger = logging.getLogger(__name__)
@@ -420,6 +421,14 @@ class IngestWorker:
         claimed = await asyncio.to_thread(self.store.claim)
         if claimed is None:
             return None
+        job = claimed.job
+        token = request_id_var.set(f"job-{job.id}")
+        try:
+            return await self._process(claimed)
+        finally:
+            request_id_var.reset(token)
+
+    async def _process(self, claimed: ClaimedJob) -> Job:
         job = claimed.job
         logger.info(
             "ingest job %s started (tenant %s, attempt %d of %d)",

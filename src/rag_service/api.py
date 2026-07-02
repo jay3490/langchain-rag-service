@@ -32,6 +32,7 @@ from rag_service.filters import TENANT_KEY, FilterValue, MetadataFilter
 from rag_service.guardrails import Refusal
 from rag_service.ingestion import UnsupportedFileError, checked_source_name
 from rag_service.jobs import IngestWorker, Job, JobStatus, JobStore, create_job_engine, sqlite_url
+from rag_service.logging_setup import RequestContextMiddleware
 from rag_service.retrieval import RetrievalOptions
 from rag_service.service import EmptyIndexError, PathOutsideRootError, RagService
 from rag_service.store import IngestResult
@@ -312,6 +313,7 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
     )
     app.state.service = rag
     app.state.authenticator = authenticator
+    app.add_middleware(RequestContextMiddleware)
 
     @app.get("/health", response_model=HealthResponse, tags=["meta"])
     def health(service: ServiceDep) -> HealthResponse:
