@@ -24,6 +24,7 @@ from typing import Any
 from langchain_core.callbacks import (
     AsyncCallbackManagerForRetrieverRun,
     CallbackManagerForRetrieverRun,
+    Callbacks,
 )
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
@@ -45,18 +46,33 @@ class Reranker(ABC):
     name: str
 
     @abstractmethod
-    def score(self, query: str, documents: Sequence[Document]) -> list[float]: ...
+    def score(
+        self, query: str, documents: Sequence[Document], callbacks: Callbacks = None
+    ) -> list[float]:
+        """Score ``documents``; ``callbacks`` reach any model calls the reranker makes."""
 
-    async def ascore(self, query: str, documents: Sequence[Document]) -> list[float]:
-        return await asyncio.to_thread(self.score, query, documents)
+    async def ascore(
+        self, query: str, documents: Sequence[Document], callbacks: Callbacks = None
+    ) -> list[float]:
+        return await asyncio.to_thread(self.score, query, documents, callbacks)
 
-    def rerank(self, query: str, documents: Sequence[Document], top_n: int) -> list[Document]:
-        return apply_scores(documents, self.score(query, documents), top_n)
+    def rerank(
+        self,
+        query: str,
+        documents: Sequence[Document],
+        top_n: int,
+        callbacks: Callbacks = None,
+    ) -> list[Document]:
+        return apply_scores(documents, self.score(query, documents, callbacks), top_n)
 
     async def arerank(
-        self, query: str, documents: Sequence[Document], top_n: int
+        self,
+        query: str,
+        documents: Sequence[Document],
+        top_n: int,
+        callbacks: Callbacks = None,
     ) -> list[Document]:
-        return apply_scores(documents, await self.ascore(query, documents), top_n)
+        return apply_scores(documents, await self.ascore(query, documents, callbacks), top_n)
 
 
 def apply_scores(
@@ -90,7 +106,9 @@ class LexicalReranker(Reranker):
     def __init__(self, phrase_weight: float = 0.2) -> None:
         self.phrase_weight = phrase_weight
 
-    def score(self, query: str, documents: Sequence[Document]) -> list[float]:
+    def score(
+        self, query: str, documents: Sequence[Document], callbacks: Callbacks = None
+    ) -> list[float]:
         query_tokens = tokenize(query)
         terms = set(query_tokens)
         if not terms or not documents:
@@ -149,15 +167,21 @@ class LLMReranker(Reranker):
         lexical = self.fallback.score(query, documents)
         return [grade if grade is not None else lexical[i] for i, grade in enumerate(grades)]
 
-    def score(self, query: str, documents: Sequence[Document]) -> list[float]:
+    def score(
+        self, query: str, documents: Sequence[Document], callbacks: Callbacks = None
+    ) -> list[float]:
         replies = self.chain.batch(
-            self._inputs(query, documents), config={"max_concurrency": self.max_concurrency}
+            self._inputs(query, documents),
+            config={"max_concurrency": self.max_concurrency, "callbacks": callbacks},
         )
         return self._combine(query, documents, replies)
 
-    async def ascore(self, query: str, documents: Sequence[Document]) -> list[float]:
+    async def ascore(
+        self, query: str, documents: Sequence[Document], callbacks: Callbacks = None
+    ) -> list[float]:
         replies = await self.chain.abatch(
-            self._inputs(query, documents), config={"max_concurrency": self.max_concurrency}
+            self._inputs(query, documents),
+            config={"max_concurrency": self.max_concurrency, "callbacks": callbacks},
         )
         return self._combine(query, documents, replies)
 
@@ -178,7 +202,9 @@ class CrossEncoderReranker(Reranker):
         self.model = CrossEncoder(model_name)
         self.batch_size = batch_size
 
-    def score(self, query: str, documents: Sequence[Document]) -> list[float]:
+    def score(
+        self, query: str, documents: Sequence[Document], callbacks: Callbacks = None
+    ) -> list[float]:
         if not documents:
             return []
         pairs = [(query, d.page_content) for d in documents]
@@ -209,11 +235,13 @@ class RerankingRetriever(BaseRetriever):
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
     ) -> list[Document]:
-        candidates = self.base.invoke(query, config={"callbacks": run_manager.get_child()})
-        return self.reranker.rerank(query, candidates, self.k)
+        callbacks = run_manager.get_child()
+        candidates = self.base.invoke(query, config={"callbacks": callbacks})
+        return self.reranker.rerank(query, candidates, self.k, callbacks)
 
     async def _aget_relevant_documents(
         self, query: str, *, run_manager: AsyncCallbackManagerForRetrieverRun
     ) -> list[Document]:
-        candidates = await self.base.ainvoke(query, config={"callbacks": run_manager.get_child()})
-        return await self.reranker.arerank(query, candidates, self.k)
+        callbacks = run_manager.get_child()
+        candidates = await self.base.ainvoke(query, config={"callbacks": callbacks})
+        return await self.reranker.arerank(query, candidates, self.k, callbacks)

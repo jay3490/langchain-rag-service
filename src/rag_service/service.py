@@ -7,13 +7,15 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, NamedTuple, cast
 
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import RunnableConfig
 
 from rag_service.budget import ContextBudget, get_token_counter
-from rag_service.cache import AnswerCache, Cache, CachedEmbeddings, build_cache
+from rag_service.cache import AnswerCache, Cache, CachedEmbeddings, CacheStats, build_cache
 from rag_service.chain import (
     RagResult,
     build_answer_chain,
@@ -27,6 +29,7 @@ from rag_service.guardrails import Guardrails
 from rag_service.indexes import IndexRegistry, build_index_factory
 from rag_service.ingestion import load_bytes, load_directory, safe_source_name, split_documents
 from rag_service.memory import SessionStore
+from rag_service.metrics import MetricsCallbackHandler, ServiceMetrics
 from rag_service.providers import build_chat_model, build_embeddings
 from rag_service.rerank import Reranker, RerankingRetriever, build_reranker
 from rag_service.retrieval import RetrievalOptions, build_retriever
@@ -101,6 +104,11 @@ class RagService:
             citation_policy=settings.citation_policy,
         )
         self.tokens = get_token_counter(settings.tokenizer_encoding)
+        self.metrics = ServiceMetrics()
+        self.callbacks: list[BaseCallbackHandler] = [
+            MetricsCallbackHandler(self.metrics, self.tokens)
+        ]
+        self.metrics.watch_caches(self._cache_stats)
         self.budget = (
             ContextBudget(self.tokens, settings.max_context_tokens)
             if settings.max_context_tokens
@@ -119,6 +127,19 @@ class RagService:
         index = self.index_for(tenant_id)
         index.sync()
         return index.snapshot
+
+    def _cache_stats(self) -> list[CacheStats]:
+        stats: list[CacheStats] = []
+        if isinstance(self.embeddings, CachedEmbeddings):
+            stats.append(self.embeddings.stats)
+        if self.answers is not None:
+            stats.append(self.answers.stats)
+        return stats
+
+    @property
+    def run_config(self) -> RunnableConfig:
+        """Config for every chain run: the observability callbacks."""
+        return {"callbacks": list(self.callbacks)}
 
     def close(self) -> None:
         """Release external connections (the cache)."""
@@ -207,10 +228,13 @@ class RagService:
         else:
             retriever = self._build_retriever(snapshot, effective)
             chain = build_rag_chain(self.llm, retriever, self.budget, self.guardrails)
-            result = await chain.ainvoke({"question": question, "chat_history": history})
+            result = await chain.ainvoke(
+                {"question": question, "chat_history": history}, config=self.run_config
+            )
             self._store_answer(cache_key, result)
         if session:
             self.sessions.append_turn(session, question, result["answer"])
+        self.metrics.observe_answer(result["refusal"], result["cached"])
         return result
 
     async def stream_answer(
@@ -239,10 +263,11 @@ class RagService:
                 yield event
             if session:
                 self.sessions.append_turn(session, question, cached["answer"])
+            self.metrics.observe_answer(cached["refusal"], cached=True)
             return
         retriever = self._build_retriever(snapshot, effective)
         state = await build_retrieval_chain(retriever, self.llm, self.budget).ainvoke(
-            {"question": question, "chat_history": history}
+            {"question": question, "chat_history": history}, config=self.run_config
         )
         yield StreamEvent(
             "sources",
@@ -254,10 +279,12 @@ class RagService:
             },
         )
         parts: list[str] = []
-        async for token in build_answer_chain(self.llm, self.guardrails).astream(state):
+        answer_chain = build_answer_chain(self.llm, self.guardrails)
+        async for token in answer_chain.astream(state, config=self.run_config):
             parts.append(token)
             yield StreamEvent("token", token)
         reviewed = self.guardrails.review("".join(parts), state["documents"], state["confidence"])
+        self.metrics.observe_answer(reviewed.refusal, cached=False)
         if session:
             self.sessions.append_turn(session, question, reviewed.answer)
         self._store_answer(

@@ -21,6 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import PlainTextResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
@@ -33,6 +34,7 @@ from rag_service.guardrails import Refusal
 from rag_service.ingestion import UnsupportedFileError, checked_source_name
 from rag_service.jobs import IngestWorker, Job, JobStatus, JobStore, create_job_engine, sqlite_url
 from rag_service.logging_setup import RequestContextMiddleware
+from rag_service.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
 from rag_service.retrieval import RetrievalOptions
 from rag_service.service import EmptyIndexError, PathOutsideRootError, RagService
 from rag_service.store import IngestResult
@@ -290,6 +292,9 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
         rag.start()
         jobs = build_job_store(rag.settings)
         app.state.jobs = jobs
+        rag.metrics.watch_gauge(
+            "rag_ingest_jobs_queued", "Ingest jobs waiting to run.", jobs.queued_count
+        )
         worker = IngestWorker(
             jobs,
             lambda tenant, files: rag.ingest_files(files, tenant_id=tenant),
@@ -313,7 +318,7 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
     )
     app.state.service = rag
     app.state.authenticator = authenticator
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestContextMiddleware, observers=[rag.metrics.observe_request])
 
     @app.get("/health", response_model=HealthResponse, tags=["meta"])
     def health(service: ServiceDep) -> HealthResponse:
@@ -326,6 +331,11 @@ def create_app(settings: Settings | None = None, service: RagService | None = No
             tenants_loaded=len(loaded),
             chunks=sum(len(index.snapshot.chunks) for index in loaded.values()),
         )
+
+    @app.get("/metrics", tags=["meta"], response_class=PlainTextResponse)
+    def metrics(service: ServiceDep) -> PlainTextResponse:
+        """Prometheus metrics in the text exposition format."""
+        return PlainTextResponse(service.metrics.render(), media_type=METRICS_CONTENT_TYPE)
 
     @app.post("/ingest/files", response_model=IngestResponse, tags=["ingest"])
     def ingest_files(
