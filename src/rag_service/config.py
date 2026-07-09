@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "text"] = "json"
+    otel_exporter: Literal["none", "console", "otlp"] = Field(
+        default="none",
+        description="none keeps the process-wide tracer provider (no-op unless set up).",
+    )
+    otel_service_name: str = "langchain-rag-service"
+    otel_endpoint: str | None = Field(
+        default=None,
+        description="OTLP/HTTP traces endpoint; unset defers to OTEL_EXPORTER_OTLP_* variables.",
+    )
 
     # Tenancy -------------------------------------------------------------
     api_keys: dict[str, str] = Field(
@@ -179,6 +188,7 @@ class Settings(BaseSettings):
         "redis_url",
         "embedding_cache_ttl_seconds",
         "answer_cache_ttl_seconds",
+        "otel_endpoint",
         mode="before",
     )
     @classmethod

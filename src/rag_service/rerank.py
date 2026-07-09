@@ -30,6 +30,7 @@ from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import RunnableConfig
 from pydantic import ConfigDict, Field
 
 from rag_service.config import Settings
@@ -148,10 +149,19 @@ class LLMReranker(Reranker):
     def __init__(
         self, llm: BaseChatModel, *, max_concurrency: int = 4, passage_chars: int = 2000
     ) -> None:
-        self.chain = (rerank_prompt() | llm | StrOutputParser()).with_config(run_name="rerank")
+        # No .with_config() binding here: a binding merges its callbacks with the
+        # enclosing run's, which would attach these model calls to the wrong parent.
+        self.chain = rerank_prompt() | llm | StrOutputParser()
         self.max_concurrency = max_concurrency
         self.passage_chars = passage_chars
         self.fallback = LexicalReranker()
+
+    def _config(self, callbacks: Callbacks) -> RunnableConfig:
+        return {
+            "run_name": "rerank",
+            "max_concurrency": self.max_concurrency,
+            "callbacks": callbacks,
+        }
 
     def _inputs(self, query: str, documents: Sequence[Document]) -> list[dict[str, Any]]:
         return [
@@ -172,7 +182,7 @@ class LLMReranker(Reranker):
     ) -> list[float]:
         replies = self.chain.batch(
             self._inputs(query, documents),
-            config={"max_concurrency": self.max_concurrency, "callbacks": callbacks},
+            config=self._config(callbacks),
         )
         return self._combine(query, documents, replies)
 
@@ -181,7 +191,7 @@ class LLMReranker(Reranker):
     ) -> list[float]:
         replies = await self.chain.abatch(
             self._inputs(query, documents),
-            config={"max_concurrency": self.max_concurrency, "callbacks": callbacks},
+            config=self._config(callbacks),
         )
         return self._combine(query, documents, replies)
 

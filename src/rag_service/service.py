@@ -13,6 +13,9 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import RunnableConfig
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import Span, Status, StatusCode
 
 from rag_service.budget import ContextBudget, get_token_counter
 from rag_service.cache import AnswerCache, Cache, CachedEmbeddings, CacheStats, build_cache
@@ -34,6 +37,7 @@ from rag_service.providers import build_chat_model, build_embeddings
 from rag_service.rerank import Reranker, RerankingRetriever, build_reranker
 from rag_service.retrieval import RetrievalOptions, build_retriever
 from rag_service.store import DocumentIndex, IndexSnapshot, IngestResult
+from rag_service.tracing import TracingCallbackHandler, build_tracer_provider, get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +74,13 @@ class RagService:
         llm: BaseChatModel | None = None,
         reranker: Reranker | None = None,
         cache: Cache | None = None,
+        tracer_provider: TracerProvider | None = None,
     ) -> None:
         self.settings = settings
+        self._owned_tracer_provider = (
+            build_tracer_provider(settings) if tracer_provider is None else None
+        )
+        self.tracer = get_tracer(tracer_provider or self._owned_tracer_provider)
         self.cache = cache or (build_cache(settings) if settings.cache_enabled else None)
         base_embeddings = embeddings or build_embeddings(settings)
         self.embeddings: Embeddings = (
@@ -136,15 +145,17 @@ class RagService:
             stats.append(self.answers.stats)
         return stats
 
-    @property
-    def run_config(self) -> RunnableConfig:
-        """Config for every chain run: the observability callbacks."""
-        return {"callbacks": list(self.callbacks)}
+    def run_config(self, span: Span) -> RunnableConfig:
+        """Config for a chain run: metrics, and tracing under ``span``."""
+        tracing = TracingCallbackHandler(self.tracer, trace.set_span_in_context(span))
+        return {"callbacks": [*self.callbacks, tracing]}
 
     def close(self) -> None:
-        """Release external connections (the cache)."""
+        """Release external connections (the cache) and flush spans."""
         if self.cache is not None:
             self.cache.close()
+        if self._owned_tracer_provider is not None:
+            self._owned_tracer_provider.shutdown()
 
     def start(self) -> None:
         """Load the default tenant's index and run the startup ingest, if configured."""
@@ -165,8 +176,17 @@ class RagService:
     # Ingestion -------------------------------------------------------------------
 
     def _index(self, documents: list[Document], tenant_id: str) -> IngestResult:
-        chunks = split_documents(documents, self.settings.chunk_size, self.settings.chunk_overlap)
-        return self.index_for(tenant_id).add(chunks)
+        with self.tracer.start_as_current_span(
+            "rag.index", attributes={"rag.tenant": tenant_id, "rag.documents": len(documents)}
+        ) as span:
+            chunks = split_documents(
+                documents, self.settings.chunk_size, self.settings.chunk_overlap
+            )
+            result = self.index_for(tenant_id).add(chunks)
+            span.set_attribute("rag.chunks_added", result.chunks_added)
+            span.set_attribute("rag.chunks_removed", result.chunks_removed)
+            span.set_attribute("rag.sources_unchanged", len(result.unchanged))
+            return result
 
     def resolve_ingest_path(self, path: Path) -> Path:
         """Resolve ``path`` against ``ingest_root`` and refuse anything outside it."""
@@ -218,6 +238,27 @@ class RagService:
         A question without prior history is looked up in the answer cache first.
         """
         tenant = tenant_id or self.default_tenant
+        span = self._answer_span(tenant, question, streaming=False)
+        try:
+            result = await self._answer(question, tenant, session_id, options, span)
+        except Exception as exc:
+            _record_error(span, exc)
+            raise
+        else:
+            span.set_attribute("rag.confidence", result["confidence"])
+            _annotate(span, result["cached"], result["refusal"], len(result["sources"]))
+            return result
+        finally:
+            span.end()
+
+    async def _answer(
+        self,
+        question: str,
+        tenant: str,
+        session_id: str | None,
+        options: RetrievalOptions | None,
+        span: Span,
+    ) -> RagResult:
         snapshot, effective = self._prepare(tenant, options)
         session = self.session_key(tenant, session_id) if session_id else None
         history = self.sessions.get(session) if session else []
@@ -229,7 +270,7 @@ class RagService:
             retriever = self._build_retriever(snapshot, effective)
             chain = build_rag_chain(self.llm, retriever, self.budget, self.guardrails)
             result = await chain.ainvoke(
-                {"question": question, "chat_history": history}, config=self.run_config
+                {"question": question, "chat_history": history}, config=self.run_config(span)
             )
             self._store_answer(cache_key, result)
         if session:
@@ -253,6 +294,30 @@ class RagService:
         is sent as a single ``token`` event.
         """
         tenant = tenant_id or self.default_tenant
+        span = self._answer_span(tenant, question, streaming=True)
+        sources = 0
+        try:
+            async for event in self._stream_answer(question, tenant, session_id, options, span):
+                if event.event == "sources":
+                    sources = len(event.data["sources"])
+                    span.set_attribute("rag.confidence", event.data["confidence"])
+                elif event.event == "done":
+                    _annotate(span, event.data["cached"], event.data["refusal"], sources)
+                yield event
+        except Exception as exc:
+            _record_error(span, exc)
+            raise
+        finally:
+            span.end()
+
+    async def _stream_answer(
+        self,
+        question: str,
+        tenant: str,
+        session_id: str | None,
+        options: RetrievalOptions | None,
+        span: Span,
+    ) -> AsyncIterator[StreamEvent]:
         snapshot, effective = self._prepare(tenant, options)
         session = self.session_key(tenant, session_id) if session_id else None
         history = self.sessions.get(session) if session else []
@@ -267,7 +332,7 @@ class RagService:
             return
         retriever = self._build_retriever(snapshot, effective)
         state = await build_retrieval_chain(retriever, self.llm, self.budget).ainvoke(
-            {"question": question, "chat_history": history}, config=self.run_config
+            {"question": question, "chat_history": history}, config=self.run_config(span)
         )
         yield StreamEvent(
             "sources",
@@ -280,7 +345,7 @@ class RagService:
         )
         parts: list[str] = []
         answer_chain = build_answer_chain(self.llm, self.guardrails)
-        async for token in answer_chain.astream(state, config=self.run_config):
+        async for token in answer_chain.astream(state, config=self.run_config(span)):
             parts.append(token)
             yield StreamEvent("token", token)
         reviewed = self.guardrails.review("".join(parts), state["documents"], state["confidence"])
@@ -310,6 +375,16 @@ class RagService:
                 "invalid_citations": reviewed.invalid_citations,
                 "refusal": reviewed.refusal,
                 "cached": False,
+            },
+        )
+
+    def _answer_span(self, tenant: str, question: str, *, streaming: bool) -> Span:
+        return self.tracer.start_span(
+            "rag.answer",
+            attributes={
+                "rag.tenant": tenant,
+                "rag.question_chars": len(question),
+                "rag.streaming": streaming,
             },
         )
 
@@ -414,3 +489,14 @@ class RagService:
             reranker=self.reranker,
             k=options.k,
         )
+
+
+def _annotate(span: Span, cached: bool, refusal: str | None, sources: int) -> None:
+    span.set_attribute("rag.cached", cached)
+    span.set_attribute("rag.refusal", refusal or "none")
+    span.set_attribute("rag.sources", sources)
+
+
+def _record_error(span: Span, error: BaseException) -> None:
+    span.record_exception(error)
+    span.set_status(Status(StatusCode.ERROR, type(error).__name__))

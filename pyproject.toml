@@ -30,6 +30,8 @@ dependencies = [
     "tiktoken>=0.8",
     "redis>=5.2",
     "prometheus-client>=0.21",
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
 ]
 
 [project.scripts]
@@ -40,6 +42,9 @@ rag-apikey = "rag_service.auth:main"
 [project.optional-dependencies]
 rerank = [
     "sentence-transformers>=3.0",
+]
+otel = [
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
 ]
 dev = [
     "pytest>=9.0",
