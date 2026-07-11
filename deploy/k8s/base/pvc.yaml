@@ -1,0 +1,11 @@
+# Holds the per-tenant FAISS indexes and the SQLite job table (RAG_INDEX_DIR).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rag-service-index
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

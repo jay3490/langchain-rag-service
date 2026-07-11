@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-service
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rag-service
+              app.kubernetes.io/component: api
+      containers:
+        - name: api
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              memory: 1536Mi
+      volumes:
+        # Scratch space only: indexes live in Qdrant, jobs in the shared database.
+        - name: index
+          persistentVolumeClaim: null
+          emptyDir: {}

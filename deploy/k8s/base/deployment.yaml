@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-service
+spec:
+  replicas: 1
+  # FAISS files and SQLite live on a ReadWriteOnce volume with a single writer, so
+  # the old pod must stop before the new one mounts it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: api
+          image: rag-service
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: RAG_HOST
+              value: 0.0.0.0
+            - name: RAG_PORT
+              value: "8000"
+          envFrom:
+            - configMapRef:
+                name: rag-service-config
+            # RAG_API_KEYS, RAG_OPENAI_API_KEY, RAG_QDRANT_API_KEY,
+            # RAG_JOBS_DATABASE_URL ... created outside this repository.
+            - secretRef:
+                name: rag-service-secrets
+                optional: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: index
+              mountPath: /app/var
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: index
+          persistentVolumeClaim:
+            claimName: rag-service-index
+        - name: tmp
+          emptyDir: {}

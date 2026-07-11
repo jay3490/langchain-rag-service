@@ -2,8 +2,12 @@
 
 FROM python:3.13-slim AS builder
 
+# Optional extras, comma-separated: rerank, otel, postgres.
+ARG EXTRAS=""
+
 ENV PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken
 
 WORKDIR /build
 RUN python -m venv /opt/venv
@@ -11,7 +15,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN pip install .
+RUN pip install ".${EXTRAS:+[$EXTRAS]}"
+# Fetch the tokenizer at build time so the container needs no network for it.
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
 
 FROM python:3.13-slim AS runtime
@@ -19,6 +25,7 @@ FROM python:3.13-slim AS runtime
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken \
     RAG_HOST=0.0.0.0 \
     RAG_PORT=8000 \
     RAG_INDEX_DIR=/app/var/index \
@@ -30,6 +37,7 @@ RUN groupadd --system --gid 10001 app \
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/tiktoken /opt/tiktoken
 COPY --chown=app:app data ./data
 RUN mkdir -p /app/var && chown app:app /app/var
 

@@ -1,0 +1,38 @@
+# Several stateless API replicas: vectors in Qdrant, cache in Redis, the job table
+# in a database every replica can reach (RAG_JOBS_DATABASE_URL in the secret, e.g.
+# postgresql+psycopg://... with an image built with EXTRAS=postgres). Qdrant, Redis
+# and the database are not part of this overlay.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: rag
+
+resources:
+  - ../../base
+  - hpa.yaml
+
+patches:
+  - path: configmap-patch.yaml
+  - path: deployment-patch.yaml
+  - path: service-patch.yaml
+  # Replicas no longer write to local disk, so they do not need the volume claim.
+  - target:
+      kind: PersistentVolumeClaim
+      name: rag-service-index
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: rag-service-index
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: rag-service
+      app.kubernetes.io/part-of: langchain-rag-service
+    includeSelectors: false
+
+images:
+  # The base already renamed the image; build this one with EXTRAS=postgres,otel.
+  - name: registry.example.com/langchain-rag-service
+    newTag: "0.2.0-postgres-otel"

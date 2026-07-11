@@ -1,0 +1,11 @@
+# Session history is kept in each replica's memory; client affinity keeps a
+# conversation on one pod for as long as that pod lives.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-service
+spec:
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600

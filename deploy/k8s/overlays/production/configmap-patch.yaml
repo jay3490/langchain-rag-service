@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-service-config
+data:
+  RAG_PROVIDER: openai
+  RAG_VECTOR_STORE: qdrant
+  RAG_QDRANT_URL: http://qdrant.rag.svc.cluster.local:6333
+  RAG_QDRANT_SYNC_SECONDS: "5"
+  RAG_REDIS_URL: redis://redis.rag.svc.cluster.local:6379/0
+  # Startup ingest of the sample corpus is for demos only.
+  RAG_INGEST_ON_STARTUP: ""
+  RAG_RERANKER: llm
+  RAG_OTEL_EXPORTER: otlp
+  RAG_OTEL_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4318/v1/traces

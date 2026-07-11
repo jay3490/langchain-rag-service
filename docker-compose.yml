@@ -1,5 +1,9 @@
-# Default: the API with the credential-free fake provider.
+# Default: the API with the credential-free fake provider, Qdrant for vectors and
+# Redis for the embedding and answer caches.
 #   docker compose up --build
+#
+# FAISS on the local volume instead of Qdrant (Redis is still used):
+#   RAG_VECTOR_STORE=faiss docker compose up --build
 #
 # With a local Ollama server (OpenAI-compatible endpoint):
 #   RAG_PROVIDER=openai docker compose --profile ollama up --build
@@ -9,7 +13,10 @@
 
 services:
   api:
-    build: .
+    build:
+      context: .
+      args:
+        EXTRAS: ${RAG_EXTRAS:-}
     ports:
       - "8000:8000"
     environment:
@@ -18,10 +25,41 @@ services:
       RAG_OPENAI_API_KEY: ${RAG_OPENAI_API_KEY:-}
       RAG_CHAT_MODEL: ${RAG_CHAT_MODEL:-llama3.2}
       RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-nomic-embed-text}
-      # One index per provider: an index is tied to the embedding model that built it.
+      RAG_VECTOR_STORE: ${RAG_VECTOR_STORE:-qdrant}
+      RAG_QDRANT_URL: http://qdrant:6333
+      # One collection set and index directory per provider: an index is tied to
+      # the embedding model that built it.
+      RAG_QDRANT_COLLECTION_PREFIX: rag_${RAG_PROVIDER:-fake}_
       RAG_INDEX_DIR: /app/var/index-${RAG_PROVIDER:-fake}
+      RAG_REDIS_URL: redis://redis:6379/0
+      RAG_API_KEYS: ${RAG_API_KEYS:-}
+      RAG_RERANKER: ${RAG_RERANKER:-lexical}
+      RAG_LOG_FORMAT: ${RAG_LOG_FORMAT:-json}
     volumes:
       - rag-var:/app/var
+    depends_on:
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.2-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   ollama:
@@ -35,4 +73,5 @@ services:
 
 volumes:
   rag-var:
+  qdrant-data:
   ollama-models:

@@ -12,4 +12,5 @@ dist
 var
 tests
 docker-compose.yml
+deploy
 Dockerfile

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-service-config
+data:
+  RAG_PROVIDER: fake
+  RAG_VECTOR_STORE: faiss
+  RAG_INDEX_DIR: /app/var/index
+  RAG_INGEST_ROOT: /app/data
+  RAG_INGEST_ON_STARTUP: /app/data/docs
+  RAG_RETRIEVER_MODE: hybrid
+  RAG_RERANKER: lexical
+  RAG_MIN_RETRIEVAL_CONFIDENCE: "0.2"
+  RAG_CITATION_POLICY: strip
+  RAG_MAX_CONTEXT_TOKENS: "3000"
+  RAG_LOG_FORMAT: json
+  RAG_LOG_LEVEL: INFO
+  RAG_OTEL_EXPORTER: none

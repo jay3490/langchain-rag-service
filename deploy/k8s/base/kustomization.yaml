@@ -1,0 +1,21 @@
+# Single-replica deployment: FAISS indexes and the SQLite job table on one
+# ReadWriteOnce volume. See overlays/production for the scaled-out variant.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: rag-service
+      app.kubernetes.io/part-of: langchain-rag-service
+    includeSelectors: true
+
+resources:
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+
+images:
+  - name: rag-service
+    newName: registry.example.com/langchain-rag-service  # replace with your registry
+    newTag: "0.2.0"
