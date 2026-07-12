@@ -107,3 +107,32 @@ def test_cli_prints_a_table_and_json(capsys: pytest.CaptureFixture[str]) -> None
     (report,) = json.loads(capsys.readouterr().out)
     assert report["mode"] == "hybrid"
     assert report["k"] == 3
+
+
+def test_run_compares_rerankers() -> None:
+    reports = run(
+        Settings(_env_file=None),
+        SAMPLE_DOCS,
+        QUESTIONS,
+        k=4,
+        modes=["hybrid"],
+        rerankers=["none", "lexical"],
+    )
+
+    assert [(r.mode, r.reranker) for r in reports] == [("hybrid", "none"), ("hybrid", "lexical")]
+    plain, reranked = reports
+    assert plain.results[0].question == reranked.results[0].question
+    assert 0.0 <= reranked.mrr <= reranked.hit_rate <= 1.0
+
+
+def test_cli_accepts_rerankers(capsys: pytest.CaptureFixture[str]) -> None:
+    args = ["--docs", str(SAMPLE_DOCS), "--questions", str(QUESTIONS), "--mode", "bm25"]
+
+    assert main([*args, "--reranker", "llm", "--json"]) == 0
+    (report,) = json.loads(capsys.readouterr().out)
+    assert report["reranker"] == "llm"
+
+    assert main([*args, "--reranker", "none", "--reranker", "lexical"]) == 0
+    table = capsys.readouterr().out
+    assert "rerank candidates: 12" in table
+    assert "lexical" in table

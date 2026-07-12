@@ -22,12 +22,14 @@ from langchain_core.retrievers import BaseRetriever
 
 from rag_service.config import RetrieverMode, Settings
 from rag_service.ingestion import load_directory, split_documents
-from rag_service.providers import build_embeddings
+from rag_service.providers import build_chat_model, build_embeddings
+from rag_service.rerank import RerankingRetriever, build_reranker
 from rag_service.retrieval import RetrievalOptions, build_retriever
 from rag_service.service import embedding_id
 from rag_service.store import FaissIndex
 
 MODES: tuple[RetrieverMode, ...] = ("dense", "bm25", "hybrid")
+RERANKERS = ("none", "lexical", "llm")
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ class EvalReport:
     mode: str
     search_type: str
     k: int
+    reranker: str
     questions: int
     hit_rate: float
     mrr: float
@@ -97,6 +100,7 @@ def evaluate(
     mode: str,
     search_type: str,
     k: int,
+    reranker: str = "none",
 ) -> EvalReport:
     """Run every question through ``retriever`` and score the top ``k`` chunks."""
     results: list[QuestionResult] = []
@@ -111,6 +115,7 @@ def evaluate(
         mode=mode,
         search_type=search_type,
         k=k,
+        reranker=reranker,
         questions=len(results),
         hit_rate=hit_rate(ranks, k),
         mrr=mean_reciprocal_rank(ranks),
@@ -125,10 +130,16 @@ def run(
     *,
     k: int,
     modes: Sequence[RetrieverMode],
+    rerankers: Sequence[str] = ("none",),
 ) -> list[EvalReport]:
-    """Index ``docs`` into a temporary directory and evaluate each retriever mode."""
+    """Index ``docs`` into a temporary directory and evaluate each retriever mode.
+
+    Each mode is evaluated once per entry of ``rerankers`` (``none``, ``lexical`` or
+    ``llm``); a reranker re-orders ``settings.rerank_candidates`` retrieved chunks.
+    """
     questions = load_questions(questions_path)
     embeddings = build_embeddings(settings)
+    llm = build_chat_model(settings)
     chunks = split_documents(load_directory(docs), settings.chunk_size, settings.chunk_overlap)
     with tempfile.TemporaryDirectory(prefix="rag-eval-") as tmp:
         index = FaissIndex(Path(tmp), embeddings, embedding_id(settings))
@@ -136,24 +147,45 @@ def run(
         base = RetrievalOptions.from_settings(settings).with_overrides(
             k=k, fetch_k=max(k, settings.fetch_k)
         )
-        return [
-            evaluate(
-                build_retriever(index.snapshot, base.with_overrides(mode=mode)),
-                questions,
-                mode=mode,
-                search_type=base.search_type if mode != "bm25" else "-",
-                k=k,
-            )
-            for mode in modes
-        ]
+        reports: list[EvalReport] = []
+        for mode in modes:
+            options = base.with_overrides(mode=mode)
+            for name in rerankers:
+                reranker = build_reranker(settings.model_copy(update={"reranker": name}), llm)
+                retriever = (
+                    build_retriever(index.snapshot, options)
+                    if reranker is None
+                    else RerankingRetriever(
+                        base=build_retriever(
+                            index.snapshot,
+                            options.with_overrides(k=max(k, settings.rerank_candidates)),
+                        ),
+                        reranker=reranker,
+                        k=k,
+                    )
+                )
+                reports.append(
+                    evaluate(
+                        retriever,
+                        questions,
+                        mode=mode,
+                        search_type=base.search_type if mode != "bm25" else "-",
+                        k=k,
+                        reranker=name,
+                    )
+                )
+        return reports
 
 
 def format_table(reports: Sequence[EvalReport]) -> str:
-    header = f"{'mode':<8} {'search':<10} {'k':>3} {'questions':>9} {'hit_rate@k':>10} {'mrr':>6}"
+    header = (
+        f"{'mode':<8} {'search':<10} {'rerank':<8} {'k':>3} {'questions':>9} "
+        f"{'hit_rate@k':>10} {'mrr':>6}"
+    )
     lines = [header, "-" * len(header)]
     for r in reports:
         lines.append(
-            f"{r.mode:<8} {r.search_type:<10} {r.k:>3} {r.questions:>9} "
+            f"{r.mode:<8} {r.search_type:<10} {r.reranker:<8} {r.k:>3} {r.questions:>9} "
             f"{r.hit_rate:>10.3f} {r.mrr:>6.3f}"
         )
     return "\n".join(lines)
@@ -169,6 +201,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-k", type=int, default=None, help="cut-off (default: RAG_TOP_K)")
     parser.add_argument("--mode", choices=MODES, action="append", dest="modes")
     parser.add_argument("--search-type", choices=("similarity", "mmr"), default=None)
+    parser.add_argument(
+        "--reranker",
+        choices=RERANKERS,
+        action="append",
+        dest="rerankers",
+        help="evaluate with this reranker; repeat to compare (default: none)",
+    )
     parser.add_argument("--json", action="store_true", help="print the full report as JSON")
     parser.add_argument("--misses", action="store_true", help="list questions with no hit")
     return parser
@@ -179,7 +218,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     overrides = {"search_type": args.search_type} if args.search_type else {}
     settings = Settings(**overrides)
     k = args.k or settings.top_k
-    reports = run(settings, args.docs, args.questions, k=k, modes=args.modes or MODES)
+    reports = run(
+        settings,
+        args.docs,
+        args.questions,
+        k=k,
+        modes=args.modes or MODES,
+        rerankers=args.rerankers or ("none",),
+    )
 
     if args.json:
         print(json.dumps([asdict(r) for r in reports], indent=2))
@@ -190,13 +236,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         else f"openai-compatible ({settings.embedding_model})"
     )
     print(f"provider: {embedder}")
-    print(f"chunks: size {settings.chunk_size}, overlap {settings.chunk_overlap}\n")
+    print(f"chunks: size {settings.chunk_size}, overlap {settings.chunk_overlap}")
+    print(f"rerank candidates: {settings.rerank_candidates}\n")
     print(format_table(reports))
     if args.misses:
         for report in reports:
             for result in report.results:
                 if result.first_relevant_rank is None or result.first_relevant_rank > k:
-                    print(f"\n[{report.mode}] miss: {result.question}\n  got: {result.retrieved}")
+                    print(
+                        f"\n[{report.mode}/{report.reranker}] miss: {result.question}\n"
+                        f"  got: {result.retrieved}"
+                    )
     return 0
 
 
