@@ -32,7 +32,9 @@ def _record(message: str, **extra: object) -> logging.LogRecord:
 def test_json_formatter_includes_request_id_and_extras() -> None:
     token = request_id_var.set("req-1")
     try:
-        line = JsonFormatter().format(_record("hello %s", tenant="acme"))
+        line = JsonFormatter().format(
+            _record("hello %s", tenant="acme", color_message="[36mhello[0m")
+        )
     finally:
         request_id_var.reset(token)
 
@@ -42,6 +44,7 @@ def test_json_formatter_includes_request_id_and_extras() -> None:
     assert entry["logger"] == "test"
     assert entry["request_id"] == "req-1"
     assert entry["tenant"] == "acme"
+    assert "color_message" not in entry
     assert entry["ts"].endswith("+00:00")
 
 

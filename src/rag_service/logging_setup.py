@@ -29,7 +29,7 @@ request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 #: Attributes every LogRecord has; anything else was passed with ``extra=``.
 _STANDARD_ATTRS = frozenset(
     vars(logging.LogRecord("", 0, "", 0, "", None, None)).keys()
-    | {"message", "asctime", "request_id", "taskName"}
+    | {"message", "asctime", "request_id", "taskName", "color_message"}
 )
 
 access_logger = logging.getLogger("rag_service.access")
